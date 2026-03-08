@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent.parent / "config.yaml"
+DEFAULT_CONFIG = "config.yaml"
 
 
 @dataclass
