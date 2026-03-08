@@ -1,0 +1,66 @@
+# =============================================================================
+# LLM Connectomics — Experiment Configuration
+# =============================================================================
+
+# -- Model -------------------------------------------------------------------
+model:
+  name: Qwen/Qwen3-4B         # TL alias or HuggingFace model ID
+  dtype: float16                # float32, float16, bfloat16
+  device:                       # empty = auto-detect (cuda if available)
+  trust_remote_code: true       # needed for some Qwen models
+  prepend_bos: true             # always be explicit about BOS
+
+  # Cache strategy for run_with_cache
+  # "full" = cache everything (good for short prompts / exploration)
+  # "resid" = only residual stream hooks (logit lens / DLA)
+  # "attn_pattern" = only attention patterns
+  # "minimal" = resid_pre + pattern only
+  cache_strategy: full
+
+# -- Prompts -----------------------------------------------------------------
+prompts:
+  clean: "1 + 1 = "
+  corrupted: '1 + 1 = {"answer": '
+  control:                      # optional matched-length in-distribution suffix
+
+# -- Target tokens -----------------------------------------------------------
+tokens:
+  answer: "2"
+  distractor:                   # optional, e.g. " 1" for logit diff metric
+
+# -- Patching ----------------------------------------------------------------
+patching:
+  metric: logit                 # "logit" (raw answer logit) or "logit_diff" (requires distractor)
+  sweeps:                       # which patching sweeps to run in experiment 03
+    - resid_pre
+    - attn_out
+    - mlp_out
+    - head_out
+
+# -- Corruption sweep (experiment 04) ----------------------------------------
+# Each variant is run against the clean prompt. Compare attribution diffs across all.
+corruption_sweep:
+  variants:
+    - {label: "newline_3_s1",  inject: ["\n"],      count: 3, seed: 1}
+    - {label: "newline_3_s2",  inject: ["\n"],      count: 3, seed: 2}
+    - {label: "newline_3_s3",  inject: ["\n"],      count: 3, seed: 3}
+    - {label: "space_3_s1",    inject: [" "],       count: 3, seed: 1}
+    - {label: "space_3_s2",    inject: [" "],       count: 3, seed: 2}
+    - {label: "mixed_3_s1",    inject: ["\n", " "], count: 3, seed: 1}
+    - {label: "mixed_5_s1",    inject: ["\n", " "], count: 5, seed: 1}
+    - {label: "mixed_8_s1",    inject: ["\n", " "], count: 8, seed: 1}
+
+# -- Corruption --------------------------------------------------------------
+# Inject whitespace/newline tokens into the clean prompt to create an additional
+# corrupted variant in experiment 02 (alongside the hardcoded corrupted prompt).
+corruption:
+  type: none                    # "none" or "whitespace_injection"
+  inject: ["\n", " "]          # strings to inject — must be single tokens in tokenizer
+  count: 3                      # number of tokens to insert
+  seed: 42                      # null for a different result each run
+
+# -- Output ------------------------------------------------------------------
+output:
+  plot_root: plots
+  save_cache: false             # save activation cache to disk (for later reuse)
+  cache_dir: cache
