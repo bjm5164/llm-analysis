@@ -1,11 +1,11 @@
-# LLM Connectomics
+# LLM Analysis
 
 Mechanistic interpretability of LLM computations under out-of-distribution (OOD) token injection.
 Built on [TransformerLens](https://github.com/neelnanda-io/TransformerLens) targeting Qwen3-4B on a single 24 GB GPU.
 
 ## What this does
 
-The core question: **when an OOD token sequence is injected into an otherwise clean arithmetic prompt, which components of the model's computation break, and which survive?**
+The core question: **when an OOD token sequence is injected into a prompt, which components of the model's computation break, and which survive?**
 
 The approach is direct logit attribution (DLA) + activation patching:
 
@@ -22,7 +22,7 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone <repo>
-cd llm_connectomics
+cd llm-analysis
 uv sync
 ```
 
