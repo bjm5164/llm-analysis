@@ -8,9 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import streamlit as st
 import torch
 
-from connectomics.app_state import get_config, get_model, render_sidebar_memory
+from app_state import get_config, get_model, render_sidebar_memory
 
-st.set_page_config(page_title="Model — LLM Connectomics", layout="wide")
+st.set_page_config(page_title="Model — LLM Analysis", layout="wide")
 render_sidebar_memory()
 
 st.title("Model")
@@ -74,7 +74,7 @@ if st.session_state.get("model_loaded"):
     top_n = st.slider("Top-N predictions", 5, 20, 10)
 
     if st.button("Run Sanity Check"):
-        from connectomics.model import run_with_cache
+        from model import run_with_cache
 
         with st.spinner("Running…"):
             tokens = model.to_tokens(prompt, prepend_bos=cfg.model.prepend_bos)

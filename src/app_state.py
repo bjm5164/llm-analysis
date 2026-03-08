@@ -20,14 +20,14 @@ _SRC = Path(__file__).resolve().parent.parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from connectomics.config import load_config, Config, DEFAULT_CONFIG
+from config import load_config, Config, DEFAULT_CONFIG
 
 
 @st.cache_resource
 def _cached_model(name: str, dtype: str, device: str, trust_remote_code: bool):
     """Load model once and pin in GPU memory. Re-loads only if these args change."""
-    from connectomics.config import ModelConfig
-    from connectomics.model import load_model
+    from config import ModelConfig
+    from model import load_model
     cfg = ModelConfig(
         name=name, dtype=dtype, device=device or None, trust_remote_code=trust_remote_code
     )

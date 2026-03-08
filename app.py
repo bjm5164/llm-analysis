@@ -1,4 +1,4 @@
-"""LLM Connectomics — Home page.
+"""LLM Analysis — Home page.
 
 Displays current config and provides a live YAML editor.
 Navigate to experiment pages via the sidebar.
@@ -14,18 +14,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import streamlit as st
 
-from connectomics.app_state import get_config, apply_config_yaml, render_sidebar_memory
-from connectomics.config import load_config, DEFAULT_CONFIG
+from app_state import get_config, apply_config_yaml, render_sidebar_memory
+from config import load_config, DEFAULT_CONFIG
 
 st.set_page_config(
-    page_title="LLM Connectomics",
+    page_title="LLM Analysis",
     page_icon="🔬",
     layout="wide",
 )
 
 render_sidebar_memory()
 
-st.title("LLM Connectomics")
+st.title("LLM Analysis")
 st.caption(
     "Mechanistic interpretability experiments for Qwen3 using TransformerLens. "
     "Edit config here; navigate experiments via the sidebar."

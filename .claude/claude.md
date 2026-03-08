@@ -1,11 +1,11 @@
-# LLM Connectomics
+# LLM Analysis
 
 Mechanistic interpretability of LLM computations under OOD token injection, using TransformerLens.
 
 ## Project structure
 
 ```
-src/connectomics/       # Core library modules
+src/Analysis/       # Core library modules
   model.py              # Model loading, tokenization, cache helpers (HookedTransformer)
   logit_lens.py         # Logit lens trajectories, readability curves (accumulated_resid)
   attribution.py        # Direct logit attribution (decompose_resid, logit_attrs, stack_head_results)

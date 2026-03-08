@@ -11,10 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import streamlit as st
 
-from connectomics.app_state import get_config, get_model, render_sidebar_memory
-from connectomics.viz_interactive import sweep_summary_heatmap, head_attribution_heatmap
+from app_state import get_config, get_model, render_sidebar_memory
+from viz_interactive import sweep_summary_heatmap, head_attribution_heatmap
 
-st.set_page_config(page_title="Sweep — LLM Connectomics", layout="wide")
+st.set_page_config(page_title="Sweep — LLM Analysis", layout="wide")
 render_sidebar_memory()
 
 st.title("Corruption Sweep")
@@ -63,8 +63,8 @@ if run and variants:
 
     try:
         model = get_model()
-        from connectomics.model import tokenize, run_with_cache, corrupt_tokens as _corrupt
-        from connectomics.attribution import final_logit_margin, head_attribution
+        from model import tokenize, run_with_cache, corrupt_tokens as _corrupt
+        from attribution import final_logit_margin, head_attribution
 
         # Clean baseline
         tokens, str_tokens = tokenize(model, clean_prompt, prepend_bos=cfg.model.prepend_bos)

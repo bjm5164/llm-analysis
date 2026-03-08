@@ -119,16 +119,16 @@ uv run python experiments/01_clean_baseline.py -c my_config.yaml
 
 ## Library
 
-`src/connectomics/` is usable directly in notebooks:
+`src/Analysis/` is usable directly in notebooks:
 
 ```python
 import sys
 sys.path.insert(0, "src")
 
-from connectomics.config import load_config
-from connectomics.model import load_model, run_with_cache, corrupt_tokens, gpu_memory, free_memory
-from connectomics.attribution import final_logit_margin, component_attribution, head_attribution
-from connectomics.patching import make_logit_diff_metric, patch_resid_pre, compare_clean_corrupted
+from Analysis.config import load_config
+from Analysis.model import load_model, run_with_cache, corrupt_tokens, gpu_memory, free_memory
+from Analysis.attribution import final_logit_margin, component_attribution, head_attribution
+from Analysis.patching import make_logit_diff_metric, patch_resid_pre, compare_clean_corrupted
 
 cfg = load_config()
 model = load_model(cfg.model)

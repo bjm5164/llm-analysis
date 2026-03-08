@@ -1,5 +1,5 @@
 [project]
-name = "llm-connectomics"
+name = "llm-Analysis"
 version = "0.2.0"
 description = "Mechanistic interpretability of LLM computations under OOD token injection"
 readme = "README.md"
@@ -21,4 +21,4 @@ dependencies = [
 sae = ["sae-lens>=3.0.0"]
 
 [project.scripts]
-llm-connectomics = "connectomics.cli:main"
+llm-Analysis = "Analysis.cli:main"

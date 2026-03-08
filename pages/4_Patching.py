@@ -14,10 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import streamlit as st
 
-from connectomics.app_state import get_config, get_model, render_sidebar_memory
-from connectomics.viz_interactive import patch_heatmap, head_patch_heatmap
+from app_state import get_config, get_model, render_sidebar_memory
+from viz_interactive import patch_heatmap, head_patch_heatmap
 
-st.set_page_config(page_title="Patching — LLM Connectomics", layout="wide")
+st.set_page_config(page_title="Patching — LLM Analysis", layout="wide")
 render_sidebar_memory()
 
 st.title("Activation Patching")
@@ -74,8 +74,8 @@ if not selected_sweeps and run:
 
 # --- Run ---
 if run:
-    from connectomics.model import tokenize, run_with_cache
-    from connectomics.patching import (
+    from model import tokenize, run_with_cache
+    from patching import (
         make_logit_diff_metric,
         compare_clean_corrupted,
         patch_resid_pre,

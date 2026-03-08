@@ -14,7 +14,7 @@ import torch
 from transformer_lens import HookedTransformer
 import transformer_lens.utils as tl_utils
 
-from connectomics.config import ModelConfig, CorruptionConfig
+from config import ModelConfig, CorruptionConfig
 
 
 DTYPE_MAP = {

@@ -9,12 +9,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from connectomics.config import load_config, DEFAULT_CONFIG
-from connectomics.model import load_model, verify_tokenization, verify_answer_token, run_with_cache, corrupt_tokens
-from connectomics.attribution import (
+from config import load_config, DEFAULT_CONFIG
+from model import load_model, verify_tokenization, verify_answer_token, run_with_cache, corrupt_tokens
+from attribution import (
     final_logit_margin, head_attribution, print_top_heads,
 )
-from connectomics.visualization import (
+from visualization import (
     plot_tokenization_panel, plot_head_attribution, plot_attention_pattern,
 )
 

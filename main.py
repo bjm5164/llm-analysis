@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from connectomics.config import load_config, DEFAULT_CONFIG
-from connectomics.model import load_model, sanity_check, verify_answer_token
+from config import load_config, DEFAULT_CONFIG
+from model import load_model, sanity_check, verify_answer_token
 
 
 def main():

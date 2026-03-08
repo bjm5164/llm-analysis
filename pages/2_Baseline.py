@@ -11,14 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import streamlit as st
 
-from connectomics.app_state import get_config, get_model, render_sidebar_memory
-from connectomics.viz_interactive import (
+from app_state import get_config, get_model, render_sidebar_memory
+from viz_interactive import (
     tokenization_table,
     component_attribution_bar,
     head_attribution_heatmap,
 )
 
-st.set_page_config(page_title="Baseline — LLM Connectomics", layout="wide")
+st.set_page_config(page_title="Baseline — LLM Analysis", layout="wide")
 render_sidebar_memory()
 
 st.title("Baseline")
@@ -52,8 +52,8 @@ if run:
     with st.spinner("Running baseline…"):
         try:
             model = get_model()
-            from connectomics.model import tokenize, run_with_cache
-            from connectomics.attribution import (
+            from model import tokenize, run_with_cache
+            from attribution import (
                 final_logit_margin,
                 component_attribution,
                 head_attribution,
