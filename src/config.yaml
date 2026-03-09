@@ -17,36 +17,10 @@ model:
   # "minimal" = resid_pre + pattern only
   cache_strategy: full
 
-# -- Prompts -----------------------------------------------------------------
-prompts:
-  clean: "1 + 1 = "
-  corrupted: '1 + 1 = {"answer": '
-  control:                      # optional matched-length in-distribution suffix
-
-# -- Target tokens -----------------------------------------------------------
-tokens:
-  answer: "2"
-  distractor:                   # optional, e.g. " 1" for logit diff metric
-
-# -- Patching ----------------------------------------------------------------
-patching:
-  metric: logit                 # "logit" (raw answer logit) or "logit_diff" (requires distractor)
-  sweeps:                       # which patching sweeps to run in experiment 03
-    - resid_pre
-    - attn_out
-    - mlp_out
-    - head_out
-
 # -- Corruption sweep (experiment 04) ----------------------------------------
 # Each variant is run against the clean prompt. Compare attribution diffs across all.
 corruption_sweep:
   variants:
-    - {label: "newline_3_s1",  inject: ["\n"],      count: 3, seed: 1}
-    - {label: "newline_3_s2",  inject: ["\n"],      count: 3, seed: 2}
-    - {label: "newline_3_s3",  inject: ["\n"],      count: 3, seed: 3}
-    - {label: "space_3_s1",    inject: [" "],       count: 3, seed: 1}
-    - {label: "space_3_s2",    inject: [" "],       count: 3, seed: 2}
-    - {label: "mixed_3_s1",    inject: ["\n", " "], count: 3, seed: 1}
     - {label: "mixed_5_s1",    inject: ["\n", " "], count: 5, seed: 1}
     - {label: "mixed_8_s1",    inject: ["\n", " "], count: 8, seed: 1}
 

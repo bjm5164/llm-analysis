@@ -4,14 +4,11 @@ Run multiple whitespace/newline injection variants against the clean prompt
 and compare the head attribution diffs across all of them.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
 import streamlit as st
 
-from app_state import get_config, get_model, render_sidebar_memory
+from app_state import get_config, get_model, render_sidebar_memory, token_id_input
+from attribution import final_logit_margin, head_attribution
+from model import corrupt_tokens, run_with_cache, tokenize
 from viz_interactive import sweep_summary_heatmap, head_attribution_heatmap
 
 st.set_page_config(page_title="Sweep — LLM Analysis", layout="wide")
@@ -23,14 +20,29 @@ st.caption(
     "Compare which heads are consistently disrupted vs. placement-dependent."
 )
 
-cfg = get_config()
+cfg      = get_config()
 variants = cfg.corruption_sweep.named_configs()
+
+col_prompt, col_ans = st.columns([3, 1], gap="large")
+clean_prompt = col_prompt.text_area(
+    "Prompt",
+    value=st.session_state.get("sweep_prompt", ""),
+    height=80,
+    key="sweep_prompt",
+)
+try:
+    _model = get_model()
+except Exception:
+    _model = None
+with col_ans:
+    if _model:
+        answer_id = token_id_input(_model, "Answer token", key="sweep_answer_tok")
+    else:
+        st.text_input("Answer token", key="sweep_answer_tok", help="Load a model first.")
+        answer_id = None
 
 # --- Sidebar config ---
 with st.sidebar:
-    st.subheader("Run Config")
-    clean_prompt = st.text_input("Clean prompt", value=cfg.prompts.clean)
-    answer_tok = st.text_input("Answer token", value=cfg.tokens.answer)
     top_k = st.slider(
         "Top K heads in summary heatmap", 4, 32, 12,
         help="Heads ranked by |clean attribution|.",
@@ -58,19 +70,21 @@ if not variants:
 
 # --- Run ---
 if run and variants:
+    if answer_id is None:
+        st.warning("Enter a valid answer token (ID or string).")
+        st.stop()
+
     progress = st.progress(0, text="Running clean baseline…")
     status = st.empty()
 
     try:
         model = get_model()
-        from model import tokenize, run_with_cache, corrupt_tokens as _corrupt
-        from attribution import final_logit_margin, head_attribution
-
+        answer_str = model.tokenizer.decode(answer_id)
         # Clean baseline
         tokens, str_tokens = tokenize(model, clean_prompt, prepend_bos=cfg.model.prepend_bos)
         logits, cache = run_with_cache(model, tokens, strategy=cfg.model.cache_strategy)
-        clean_margin = final_logit_margin(model, logits, answer_tok)
-        clean_attrs = head_attribution(model, cache, answer_tok, pos=-1)
+        clean_margin = final_logit_margin(model, logits, answer_id)
+        clean_attrs = head_attribution(model, cache, answer_id, pos=-1)
 
         variant_labels, diffs, probs = [], [], []
         n_total = len(variants) + 1
@@ -79,12 +93,12 @@ if run and variants:
             frac = (i + 1) / n_total
             progress.progress(frac, text=f"[{label}] inject={vcfg.inject!r} count={vcfg.count}…")
 
-            inj_tokens = _corrupt(model, tokens, vcfg, prepend_bos=cfg.model.prepend_bos)
+            inj_tokens = corrupt_tokens(model, tokens, vcfg, prepend_bos=cfg.model.prepend_bos)
             inj_logits, inj_cache = run_with_cache(
                 model, inj_tokens, strategy=cfg.model.cache_strategy
             )
-            margin = final_logit_margin(model, inj_logits, answer_tok)
-            attrs = head_attribution(model, inj_cache, answer_tok, pos=-1)
+            margin = final_logit_margin(model, inj_logits, answer_id)
+            attrs = head_attribution(model, inj_cache, answer_id, pos=-1)
             diff = attrs - clean_attrs
 
             variant_labels.append(label)
@@ -100,7 +114,7 @@ if run and variants:
             "variant_labels": variant_labels,
             "diffs": diffs,
             "probs": probs,
-            "answer_tok": answer_tok,
+            "answer_tok": answer_str,
             "prompt": clean_prompt,
         }
         st.success(f"Done. {len(variants)} variants completed.")

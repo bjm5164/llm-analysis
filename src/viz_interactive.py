@@ -103,7 +103,7 @@ def patch_heatmap(
     """Patching rescue score heatmap (layer x position)."""
     data = scores.detach().cpu().float().numpy()
     seq_len = data.shape[1]
-    tok_labels = [repr(t) for t in str_tokens[:seq_len]]
+    tok_labels = [f"{i}:{repr(t)}" for i, t in enumerate(str_tokens[:seq_len])]
     vmax = float(np.abs(data).max()) or 1e-6
     fig = px.imshow(
         data,
@@ -150,21 +150,274 @@ def attention_pattern_heatmap(
     str_tokens: list[str],
     title: str | None = None,
 ) -> go.Figure:
-    """Interactive attention pattern for a single (layer, head)."""
+    """Industry-standard attention heatmap for a single (layer, head) with cell values."""
     pattern = cache["pattern", layer][0, head].detach().cpu().float().numpy()
-    seq_len = pattern.shape[0]
-    tok_labels = [repr(t) for t in str_tokens[:seq_len]]
+    seq_q, seq_k = pattern.shape
+    tok_labels_k = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_k)]
+    tok_labels_q = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_q)]
+
+    # Scale height with sequence length so cells stay readable
+    cell_px = max(18, min(40, 800 // max(seq_q, 1)))
+    fig_h = cell_px * seq_q + 120
+
     fig = px.imshow(
         pattern,
-        x=tok_labels,
-        y=tok_labels,
+        x=tok_labels_k,
+        y=tok_labels_q,
         color_continuous_scale="Blues",
         zmin=0,
         zmax=1,
-        title=title or f"L{layer} H{head} attention",
-        labels={"x": "Source (key)", "y": "Destination (query)", "color": "weight"},
+        title=title or f"L{layer} H{head} Attention Pattern",
+        labels={"x": "Source (key)", "y": "Destination (query)", "color": "Attention"},
+        aspect="equal",
     )
     fig.update_xaxes(tickangle=-45)
+    fig.update_layout(height=fig_h)
+    return fig
+
+
+def attention_all_heads_heatmap(
+    cache: ActivationCache,
+    layer: int,
+    str_tokens: list[str],
+    ncols: int = 4,
+) -> go.Figure:
+    """Grid of attention patterns for all heads in a layer."""
+    from plotly.subplots import make_subplots
+
+    patterns = cache["pattern", layer][0].detach().cpu().float().numpy()
+    n_heads = patterns.shape[0]
+    seq_len = patterns.shape[2]
+    tok_labels = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_len)]
+
+    ncols = min(ncols, n_heads)
+    nrows = (n_heads + ncols - 1) // ncols
+
+    fig = make_subplots(
+        rows=nrows,
+        cols=ncols,
+        subplot_titles=[f"H{h}" for h in range(n_heads)],
+    )
+
+    for h in range(n_heads):
+        row = h // ncols + 1
+        col = h % ncols + 1
+        fig.add_trace(
+            go.Heatmap(
+                z=patterns[h],
+                x=tok_labels,
+                y=tok_labels,
+                colorscale="Blues",
+                zmin=0,
+                zmax=1,
+                showscale=(h == 0),
+                hovertemplate="src: %{x}<br>dst: %{y}<br>attn: %{z:.3f}<extra></extra>",
+            ),
+            row=row,
+            col=col,
+        )
+
+    subplot_px = max(100, min(200, 1200 // max(seq_len, 1)))
+    fig.update_layout(
+        title=f"Layer {layer} — All Attention Heads",
+        height=subplot_px * nrows + 80,
+    )
+    for ax in fig.layout:
+        if ax.startswith("xaxis"):
+            fig.layout[ax].tickangle = -45
+            fig.layout[ax].tickfont = dict(size=8)
+        if ax.startswith("yaxis"):
+            fig.layout[ax].tickfont = dict(size=8)
+    return fig
+
+
+def attention_source_row(
+    attn_weights: "np.ndarray",
+    str_tokens: list[str],
+    dst_label: str = "",
+    title: str | None = None,
+) -> go.Figure:
+    """Token sequence colored by attention weight from a single destination token.
+
+    Shows a horizontal bar: [the] [cat] [crossed] [the] [road]
+    each box colored by how much the destination token attends to it.
+    """
+    tok_labels = [repr(t) for t in str_tokens[: len(attn_weights)]]
+    fig = px.imshow(
+        attn_weights[np.newaxis, :],
+        x=tok_labels,
+        y=[dst_label or "attn"],
+        color_continuous_scale="Blues",
+        zmin=0,
+        zmax=float(attn_weights.max()) or 1.0,
+        text_auto=".2f",
+        labels={"color": "Attention"},
+        aspect="auto",
+    )
+    fig.update_layout(
+        title=title or f"Attention from {dst_label}",
+        height=120,
+        margin=dict(t=40, b=10, l=60, r=20),
+    )
+    fig.update_yaxes(showticklabels=True, tickfont_size=10)
+    fig.update_traces(textfont_size=10)
+    return fig
+
+
+def topk_logits_comparison(
+    model,
+    orig_logits: torch.Tensor,
+    patched_logits: torch.Tensor,
+    pos: int = -1,
+    k: int = 10,
+    title: str = "Top-k final logits: original vs patched",
+) -> go.Figure:
+    """Grouped bar chart of top-k tokens by original logit, before and after intervention."""
+    orig = orig_logits[0, pos, :].detach().cpu().float()
+    patched = patched_logits[0, pos, :].detach().cpu().float()
+
+    top_ids = orig.topk(k).indices
+    labels = [
+        repr(model.tokenizer.decode([i.item()])) or f"[{i.item()}]"
+        for i in top_ids
+    ]
+
+    fig = go.Figure([
+        go.Bar(name="Original", x=labels, y=orig[top_ids].tolist(), marker_color="#3498db"),
+        go.Bar(name="Patched",  x=labels, y=patched[top_ids].tolist(), marker_color="#e74c3c"),
+    ])
+    fig.update_layout(
+        barmode="group",
+        title=title,
+        xaxis_title="Token",
+        xaxis_type="category",
+        yaxis_title="Logit",
+        xaxis_tickangle=-40,
+        height=380,
+        legend=dict(orientation="h", y=1.02, x=0),
+        margin=dict(t=60),
+    )
+    return fig
+
+
+def logit_lens_at_layer(
+    model,
+    orig_cache,
+    patched_cache,
+    layer: int,
+    pos: int,
+    k: int = 10,
+    title: str | None = None,
+) -> go.Figure:
+    """Grouped bar chart: top-k tokens from logit lens at resid_post of given layer."""
+
+    def _lens(cache):
+        resid = cache["resid_post", layer][:, pos : pos + 1, :]  # [1,1,d]
+        with torch.no_grad():
+            ln = model.ln_final(resid)              # [1,1,d]
+            logits = model.unembed(ln)[0, 0]        # [vocab]
+        return logits.detach().cpu().float()
+
+    orig_l   = _lens(orig_cache)
+    patched_l = _lens(patched_cache)
+
+    top_ids = orig_l.topk(k).indices
+    labels  = [
+        repr(model.tokenizer.decode([i.item()])) or f"[{i.item()}]"
+        for i in top_ids
+    ]
+    ttl = title or f"Logit lens at L{layer} resid_post — pos {pos}"
+
+    fig = go.Figure([
+        go.Bar(name="Original", x=labels, y=orig_l[top_ids].tolist(),   marker_color="#3498db"),
+        go.Bar(name="Patched",  x=labels, y=patched_l[top_ids].tolist(), marker_color="#e74c3c"),
+    ])
+    fig.update_layout(
+        barmode="group",
+        title=ttl,
+        xaxis_title="Token",
+        xaxis_type="category",
+        yaxis_title="Logit (logit lens)",
+        xaxis_tickangle=-40,
+        height=380,
+        legend=dict(orientation="h", y=1.02, x=0),
+        margin=dict(t=60),
+    )
+    return fig
+
+
+def answer_logit_across_layers(
+    model,
+    orig_cache,
+    patched_cache,
+    pos: int,
+    answer_token_id: int,
+    title: str = "Answer logit across layers (logit lens)",
+) -> go.Figure:
+    """Line chart: logit-lens score for the answer token at every layer, before vs after."""
+    n_layers = model.cfg.n_layers
+    orig_scores    = []
+    patched_scores = []
+
+    for layer in range(n_layers):
+        for scores, cache in [(orig_scores, orig_cache), (patched_scores, patched_cache)]:
+            resid = cache["resid_post", layer][:, pos : pos + 1, :]
+            with torch.no_grad():
+                ln     = model.ln_final(resid)
+                logits = model.unembed(ln)[0, 0]
+            scores.append(logits[answer_token_id].item())
+
+    layers = list(range(n_layers))
+    fig = go.Figure([
+        go.Scatter(x=layers, y=orig_scores,    name="Original", mode="lines+markers",
+                   line=dict(color="#3498db", width=2)),
+        go.Scatter(x=layers, y=patched_scores, name="Patched",  mode="lines+markers",
+                   line=dict(color="#e74c3c", width=2)),
+    ])
+    fig.update_layout(
+        title=title,
+        xaxis_title="Layer",
+        yaxis_title="Logit (logit lens)",
+        height=340,
+        legend=dict(orientation="h", y=1.02, x=0),
+        margin=dict(t=60),
+    )
+    return fig
+
+
+def residual_norm_across_layers(
+    model,
+    orig_cache,
+    patched_cache,
+    pos: int,
+    title: str = "Residual stream L2 norm across layers",
+) -> go.Figure:
+    """Line chart: ||resid_post||₂ at each layer for the target position."""
+    n_layers = model.cfg.n_layers
+    orig_norms    = []
+    patched_norms = []
+
+    for layer in range(n_layers):
+        o = orig_cache["resid_post", layer][0, pos, :].detach().cpu().float()
+        p = patched_cache["resid_post", layer][0, pos, :].detach().cpu().float()
+        orig_norms.append(o.norm().item())
+        patched_norms.append(p.norm().item())
+
+    layers = list(range(n_layers))
+    fig = go.Figure([
+        go.Scatter(x=layers, y=orig_norms,    name="Original", mode="lines+markers",
+                   line=dict(color="#3498db", width=2)),
+        go.Scatter(x=layers, y=patched_norms, name="Patched",  mode="lines+markers",
+                   line=dict(color="#e74c3c", width=2)),
+    ])
+    fig.update_layout(
+        title=title,
+        xaxis_title="Layer",
+        yaxis_title="‖resid_post‖₂",
+        height=320,
+        legend=dict(orientation="h", y=1.02, x=0),
+        margin=dict(t=60),
+    )
     return fig
 
 

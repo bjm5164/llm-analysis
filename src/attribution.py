@@ -47,7 +47,8 @@ def final_logit_margin(
     Returns dict with answer logit, probability, rank, and optionally
     logit differences vs distractors.
     """
-    answer_id = model.to_single_token(answer) if isinstance(answer, str) else answer
+    from app_state import resolve_single_token
+    answer_id = resolve_single_token(model, answer) if isinstance(answer, str) else answer
     final = logits[0, pos, :]
     probs = torch.softmax(final, dim=-1)
 
@@ -61,7 +62,7 @@ def final_logit_margin(
 
     if distractors:
         for d in distractors:
-            d_id = model.to_single_token(d) if isinstance(d, str) else d
+            d_id = resolve_single_token(model, d) if isinstance(d, str) else d
             d_str = model.tokenizer.decode(d_id)
             result[f"logit_diff_vs_{repr(d_str)}"] = (
                 final[answer_id] - final[d_id]
@@ -73,7 +74,8 @@ def final_logit_margin(
 def _answer_token_id(model: HookedTransformer, answer: str | int) -> int:
     """Resolve answer to a single token ID."""
     if isinstance(answer, str):
-        return model.to_single_token(answer)
+        from app_state import resolve_single_token
+        return resolve_single_token(model, answer)
     return answer
 
 

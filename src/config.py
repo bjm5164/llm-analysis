@@ -42,27 +42,6 @@ class TransformerLensConfig:
 
 
 @dataclass
-class PromptsConfig:
-    clean: str
-    corrupted: str
-    control: str | None = None
-
-
-@dataclass
-class TokensConfig:
-    answer: str
-    distractor: str | None = None
-
-
-@dataclass
-class PatchingConfig:
-    metric: str = "logit"
-    sweeps: list[str] = field(default_factory=lambda: [
-        "resid_pre", "attn_out", "mlp_out", "head_out"
-    ])
-
-
-@dataclass
 class OutputConfig:
     plot_root: str = "plots"
     save_cache: bool = False
@@ -106,9 +85,6 @@ class CorruptionSweepConfig:
 class Config:
     model: ModelConfig
     transformer_lens: TransformerLensConfig
-    prompts: PromptsConfig
-    tokens: TokensConfig
-    patching: PatchingConfig
     output: OutputConfig
     corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
     corruption_sweep: CorruptionSweepConfig = field(default_factory=CorruptionSweepConfig)
@@ -142,9 +118,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> Config:
     return Config(
         model=_build(ModelConfig, raw.get("model"), "model"),
         transformer_lens=_build(TransformerLensConfig, raw.get("transformer_lens"), "transformer_lens"),
-        prompts=_build(PromptsConfig, raw.get("prompts"), "prompts"),
-        tokens=_build(TokensConfig, raw.get("tokens"), "tokens"),
-        patching=_build(PatchingConfig, raw.get("patching"), "patching"),
         output=_build(OutputConfig, raw.get("output"), "output"),
         corruption=_build(CorruptionConfig, raw.get("corruption"), "corruption"),
         corruption_sweep=_build(CorruptionSweepConfig, raw.get("corruption_sweep"), "corruption_sweep"),

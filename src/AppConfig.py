@@ -7,11 +7,6 @@ Run with:
     streamlit run app.py
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-
 import streamlit as st
 
 from app_state import get_config, apply_config_yaml, render_sidebar_memory
@@ -43,14 +38,8 @@ with col1:
         language="yaml",
     )
 with col2:
-    st.subheader("Task")
-    st.code(
-        f"clean:      {repr(cfg.prompts.clean)}\n"
-        f"corrupted:  {repr(cfg.prompts.corrupted)}\n"
-        f"answer:     {repr(cfg.tokens.answer)}\n"
-        f"distractor: {repr(cfg.tokens.distractor)}",
-        language="yaml",
-    )
+    st.subheader("Prompts")
+    st.caption("Set per-experiment page. Use the **Prompt Explorer** to test tokenization.")
 with col3:
     st.subheader("Corruption Sweep")
     variants = cfg.corruption_sweep.named_configs()

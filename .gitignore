@@ -14,3 +14,4 @@ wheels/
 plots/
 .ipynb_checkpoints/
 .vscode/
+src/data/

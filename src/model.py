@@ -81,7 +81,8 @@ def verify_tokenization(
 
 def verify_answer_token(model: HookedTransformer, answer: str) -> int:
     """Verify that the answer is a single token and return its ID."""
-    answer_id = model.to_single_token(answer)
+    from app_state import resolve_single_token
+    answer_id = resolve_single_token(model, answer)
     answer_str = model.to_single_str_token(answer_id)
     print(f"Answer token: {repr(answer)} -> id={answer_id}, decoded={repr(answer_str)}")
     return answer_id
@@ -210,6 +211,76 @@ def corrupt_tokens(
         seq.insert(pos, rng.choice(inject_ids))
 
     return torch.tensor([seq], device=tokens.device, dtype=tokens.dtype)
+
+
+def answer_token_logit_lens(
+    model: HookedTransformer,
+    tokens: torch.Tensor,
+    answer_id: int,
+) -> list[dict]:
+    """Run logit-lens over residual stream to find where an answer token emerges.
+
+    For every layer, projects resid_post at the final token position through the
+    model's final LayerNorm + unembed, then records the answer token's logit rank
+    and softmax probability.
+
+    Args:
+        tokens:    (1, seq_len) token tensor.
+        answer_id: target token ID to track.
+
+    Returns:
+        List of dicts with keys: layer, rank (0-based), prob, logit.
+    """
+    n_layers = model.cfg.n_layers
+    names = [tl_utils.get_act_name("resid_post", layer) for layer in range(n_layers)]
+    filter_set = set(names)
+
+    with torch.no_grad():
+        _, cache = model.run_with_cache(
+            tokens, names_filter=lambda name: name in filter_set
+        )
+
+    results = []
+    for layer in range(n_layers):
+        resid = cache[tl_utils.get_act_name("resid_post", layer)]  # (1, seq, d)
+        final_resid = resid[0, -1, :]  # (d,)
+
+        # Apply final layer norm + unembed (same as model's last step)
+        normed = model.ln_final(final_resid.unsqueeze(0).unsqueeze(0))  # (1,1,d)
+        logits_vec = model.unembed(normed)[0, 0, :]  # (vocab,)
+
+        probs = torch.softmax(logits_vec, dim=-1)
+        # rank: how many tokens have higher prob (0-based; 0 = top prediction)
+        rank = int((probs > probs[answer_id]).sum().item())
+
+        results.append({
+            "layer": layer,
+            "rank": rank,
+            "prob": float(probs[answer_id].item()),
+            "logit": float(logits_vec[answer_id].item()),
+        })
+    return results
+
+
+def generate_next_token_greedy(
+    model: HookedTransformer,
+    tokens: torch.Tensor,
+) -> tuple[int, str, float]:
+    """Generate one token via greedy decoding (argmax of final-position logits).
+
+    Args:
+        tokens: (1, seq_len) token tensor.
+
+    Returns:
+        (token_id, decoded_string, probability)
+    """
+    with torch.no_grad():
+        logits = model(tokens)  # (1, seq, vocab)
+    logits_final = logits[0, -1, :]
+    probs = torch.softmax(logits_final, dim=-1)
+    next_id = int(logits_final.argmax().item())
+    next_str = model.tokenizer.decode([next_id])
+    return next_id, next_str, float(probs[next_id].item())
 
 
 def free_memory(*args):
