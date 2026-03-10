@@ -7,6 +7,7 @@ Provides:
 """
 
 import gc
+import json
 import os
 import sys
 import tempfile
@@ -105,31 +106,56 @@ def hard_reset():
 
 
 # ---------------------------------------------------------------------------
-# Prompt library — shared across all pages via session state
+# Prompt library — shared across all pages, persisted to disk as JSON
 # ---------------------------------------------------------------------------
 _PROMPT_LIBRARY_KEY = "prompt_library"
+_PROMPTS_FILE = Path(__file__).resolve().parent / "data" / "prompts.json"
+
+
+def _load_prompts_from_disk() -> dict[str, str]:
+    """Load prompts from JSON file, returning empty dict if missing."""
+    if _PROMPTS_FILE.exists():
+        try:
+            data = json.loads(_PROMPTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_prompts_to_disk(prompts: dict[str, str]) -> None:
+    """Persist current prompt library to JSON."""
+    _PROMPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PROMPTS_FILE.write_text(
+        json.dumps(prompts, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def get_saved_prompts() -> dict[str, str]:
     """Return the prompt library {label: text}."""
     if _PROMPT_LIBRARY_KEY not in st.session_state:
-        st.session_state[_PROMPT_LIBRARY_KEY] = {}
+        st.session_state[_PROMPT_LIBRARY_KEY] = _load_prompts_from_disk()
     return st.session_state[_PROMPT_LIBRARY_KEY]
 
 
 def save_prompt(label: str, text: str) -> None:
     """Add or overwrite a prompt in the library."""
     get_saved_prompts()[label] = text
+    _save_prompts_to_disk(get_saved_prompts())
 
 
 def delete_prompt(label: str) -> None:
     """Remove a single prompt from the library."""
     get_saved_prompts().pop(label, None)
+    _save_prompts_to_disk(get_saved_prompts())
 
 
 def clear_prompts() -> None:
     """Remove all saved prompts."""
     st.session_state[_PROMPT_LIBRARY_KEY] = {}
+    _save_prompts_to_disk({})
 
 
 def normalize_token_str(s: str) -> str:
@@ -178,33 +204,37 @@ def token_id_input(
     """Streamlit widget for entering a token. Returns a resolved token ID or None.
 
     Accepts either:
-      - A numeric token ID (e.g. '17')
-      - A token string (e.g. '2', 'France')
-      - A quoted token string from repr() output (e.g. \"'2'\")
+      - A numeric token ID with # prefix (e.g. '#220')
+      - A token string (e.g. '2', 'France', ' the')
+      - A quoted token string from repr() output (e.g. \"' 2'\")
 
-    Always shows the resolved ID and decoded string so the user can verify.
+    Whitespace is NEVER stripped — leading/trailing spaces are meaningful
+    for token identity (e.g. ' 2' vs '2' are different tokens).
     """
     raw = st.text_input(
         label,
-        value=st.session_state.get(key, ""),
         key=key,
-        help=help or "Enter a token ID (number) or token string.",
+        help=help or "Enter a token string, or #N for a numeric token ID (e.g. #220).",
     )
     if not raw:
         return None
 
-    # Try as numeric token ID first
-    if raw.strip().isdigit():
-        tid = int(raw.strip())
-        if tid < model.cfg.d_vocab:
-            decoded = model.tokenizer.decode(tid)
-            st.caption(f"Token ID **{tid}** → `{repr(decoded)}`")
-            return tid
-        else:
-            st.warning(f"ID {tid} out of range (vocab size {model.cfg.d_vocab})")
-            return None
+    # Explicit numeric token ID: #123
+    if raw.startswith("#"):
+        id_part = raw[1:].strip()
+        if id_part.isdigit():
+            tid = int(id_part)
+            if tid < model.cfg.d_vocab:
+                decoded = model.tokenizer.decode(tid)
+                st.caption(f"Token ID **{tid}** → `{repr(decoded)}`")
+                return tid
+            else:
+                st.warning(f"ID {tid} out of range (vocab size {model.cfg.d_vocab})")
+                return None
+        st.warning(f"Invalid token ID: `{raw}` — use `#N` format (e.g. `#220`).")
+        return None
 
-    # Otherwise treat as a string — strip quotes from repr() output
+    # Everything else is a token string — strip quotes from repr() output
     s = normalize_token_str(raw)
     ids = model.tokenizer.encode(s, add_special_tokens=False)
 
@@ -215,23 +245,102 @@ def token_id_input(
 
     # Not a single token — show what it encodes to so the user can pick
     parts = ", ".join(f"**{tid}** `{repr(model.tokenizer.decode(tid))}`" for tid in ids)
+    hint = ""
+    if s.isdigit():
+        hint = f"  \nDid you mean token **ID** {s}? Use `#{s}` instead."
     st.warning(
-        f"`{repr(s)}` encodes to {len(ids)} tokens: {parts}.  \n"
-        f"Enter one of the token IDs above as a number, or use the exact "
+        f"`{repr(s)}` encodes to {len(ids)} tokens: {parts}.{hint}  \n"
+        f"Pick one of the IDs above with `#` prefix (e.g. `#{ids[0]}`), or use the exact "
         f"token string from the Token Lookup on the Model page."
     )
     return None
 
 
-def prompt_selector(key: str, label: str = "Prompt", allow_empty: bool = True) -> str:
-    """Dropdown to pick a saved prompt. Returns the prompt text (or empty string)."""
+# ---------------------------------------------------------------------------
+# Shared "active study" prompt selection — synced across analysis pages
+# ---------------------------------------------------------------------------
+_ACTIVE_A_KEY = "active_prompt_a"
+_ACTIVE_B_KEY = "active_prompt_b"
+_ACTIVE_ANSWER_KEY = "active_answer_token"
+
+
+def get_active_prompts() -> dict[str, str]:
+    """Return {a: label, b: label, answer: token_str} for active study."""
+    return {
+        "a": st.session_state.get(_ACTIVE_A_KEY, ""),
+        "b": st.session_state.get(_ACTIVE_B_KEY, ""),
+        "answer": st.session_state.get(_ACTIVE_ANSWER_KEY, ""),
+    }
+
+
+def set_active_prompt(slot: str, label: str) -> None:
+    """Set the active prompt for slot 'a' or 'b'."""
+    key = _ACTIVE_A_KEY if slot == "a" else _ACTIVE_B_KEY
+    st.session_state[key] = label
+
+
+def set_active_answer(token_str: str) -> None:
+    """Set the active answer token string."""
+    st.session_state[_ACTIVE_ANSWER_KEY] = token_str
+
+
+def prompt_selector(
+    key: str,
+    label: str = "Prompt",
+    allow_empty: bool = True,
+    sync_slot: str | None = None,
+) -> str:
+    """Dropdown to pick a saved prompt. Returns the prompt text (or empty).
+
+    If sync_slot is "a" or "b", the selection is synchronised with the
+    active-study state so all analysis pages share the same selection.
+    """
     prompts = get_saved_prompts()
     if not prompts:
-        st.caption("No saved prompts. Add prompts on the **Prompts** page.")
+        st.caption(
+            "No saved prompts. Add prompts on the **Prompts** page."
+        )
         return ""
     options = ([""] if allow_empty else []) + list(prompts.keys())
+
+    # Pre-populate from active study when this widget key is fresh.
+    # Streamlit ignores `index` if the key already lives in session_state,
+    # so we seed session_state directly before the widget renders.
+    if sync_slot and key not in st.session_state:
+        active_label = get_active_prompts().get(sync_slot, "")
+        if active_label in options:
+            st.session_state[key] = active_label
+
     choice = st.selectbox(label, options, key=key)
+
+    # Write back to shared active state
+    if sync_slot and choice:
+        set_active_prompt(sync_slot, choice)
+
     return prompts.get(choice, "")
+
+
+def export_prompts_json() -> str:
+    """Return the prompt library as a JSON string for download."""
+    return json.dumps(get_saved_prompts(), indent=2, ensure_ascii=False)
+
+
+def import_prompts_json(raw: str, merge: bool = True) -> int:
+    """Import prompts from a JSON string. Returns count of prompts added.
+
+    If merge=True, existing prompts are kept and new ones are added/updated.
+    If merge=False, the library is replaced entirely.
+    """
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("Expected a JSON object {label: prompt_text}")
+    if merge:
+        prompts = get_saved_prompts()
+        prompts.update(data)
+    else:
+        st.session_state[_PROMPT_LIBRARY_KEY] = data
+    _save_prompts_to_disk(get_saved_prompts())
+    return len(data)
 
 
 def render_sidebar_memory():

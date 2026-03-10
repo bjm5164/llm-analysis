@@ -6,7 +6,7 @@ select positions in each, apply an intervention (zero ablation, mean ablation,
 noise injection, or activation patching), and inspect the effect on:
   - final next-token logits
   - logit lens at the target layer
-  - answer-token logit across all layers
+  - answer-token logit across all layers (optional — requires answer token)
   - residual stream L2 norm across all layers
 """
 
@@ -57,35 +57,28 @@ col_target, col_source = st.columns(2, gap="large")
 
 with col_target:
     target_text = prompt_selector(
-        "tp_target_prompt", label="Target prompt (run through model)", allow_empty=False,
+        "tp_target_prompt",
+        label="Target prompt (run through model)",
+        allow_empty=False, sync_slot="a",
     )
     if model_loaded and target_text:
-        _tt, _st_toks = tokenize(model, target_text, prepend_bos=cfg.model.prepend_bos)
-        st.caption(f"{_tt.shape[1]} tokens: {' '.join(repr(t) for t in _st_toks)}")
+        _tt, _st_toks = tokenize(
+            model, target_text, prepend_bos=cfg.model.prepend_bos,
+        )
+        st.caption(
+            f"{_tt.shape[1]} tokens: "
+            f"{' '.join(repr(t) for t in _st_toks)}"
+        )
 
 with col_source:
     source_text = prompt_selector(
-        "tp_source_prompt", label="Source prompt (for patch intervention)",
+        "tp_source_prompt",
+        label="Source prompt (for patch intervention)",
+        sync_slot="b",
     )
     if model_loaded and source_text:
         _ts, _ss_toks = tokenize(model, source_text, prepend_bos=cfg.model.prepend_bos)
         st.caption(f"{_ts.shape[1]} tokens: {' '.join(repr(t) for t in _ss_toks)}")
-
-# ---------------------------------------------------------------------------
-# Sidebar — metric tokens
-# ---------------------------------------------------------------------------
-with st.sidebar:
-    st.subheader("Metric tokens")
-    if model_loaded:
-        answer_id = token_id_input(model, "Answer token", key="tp_answer_tok")
-        distractor_id = token_id_input(
-            model, "Distractor token (optional)", key="tp_distractor",
-            help="If set, metric = logit(answer) − logit(distractor).",
-        )
-    else:
-        answer_id = None
-        distractor_id = None
-        st.caption("Load a model to resolve tokens.")
 
 st.divider()
 
@@ -187,9 +180,6 @@ if run:
     if intervention == "patch" and not source_text:
         st.warning("Select a source prompt for patch intervention.")
         st.stop()
-    if answer_id is None:
-        st.warning("Enter a valid answer token (ID or string).")
-        st.stop()
 
     progress = st.progress(0, text="Tokenizing...")
     try:
@@ -203,9 +193,6 @@ if run:
                 _, source_cache = model.run_with_cache(src_tokens)
 
         progress.progress(0.4, text="Running intervention...")
-
-        # answer_id and distractor_id are already resolved ints from token_id_input
-        metric_fn = make_logit_diff_metric(model, answer_id, distractor_id)
 
         orig_logits, patched_logits, orig_cache, patched_cache = targeted_intervention(
             model=model,
@@ -223,8 +210,6 @@ if run:
 
         progress.empty()
 
-        answer_str = model.tokenizer.decode(answer_id)
-
         st.session_state["targeted_results"] = dict(
             orig_logits=orig_logits,
             patched_logits=patched_logits,
@@ -237,10 +222,6 @@ if run:
             intervention=intervention,
             head=head,
             neuron=neuron,
-            answer_tok=answer_str,
-            answer_id=answer_id,
-            metric_orig=metric_fn(orig_logits).item(),
-            metric_patched=metric_fn(patched_logits).item(),
             top_k=top_k,
         )
         st.success("Done.")
@@ -257,18 +238,15 @@ if "targeted_results" in st.session_state:
     r = st.session_state["targeted_results"]
 
     with col_results:
-        delta = r["metric_patched"] - r["metric_orig"]
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Metric — original", f"{r['metric_orig']:.4f}")
-        m2.metric("Metric — patched", f"{r['metric_patched']:.4f}",
-                  delta=f"{delta:+.4f}")
-        m3.metric("Layer", r["layer"])
+        # --- Header metrics ---
+        m1, m2 = st.columns(2)
+        m1.metric("Layer", r["layer"])
         comp_label = r["component"]
         if r["head"] is not None:
             comp_label += f" H{r['head']}"
         if r["neuron"] is not None:
             comp_label += f" N{r['neuron']}"
-        m4.metric("Target", comp_label)
+        m2.metric("Target", comp_label)
 
         if r.get("intervention") == "patch":
             st.caption("Patching: source → target")
@@ -278,6 +256,7 @@ if "targeted_results" in st.session_state:
         k = r["top_k"]
         tok_label = repr(r["str_toks"][r["pos_idx"]])
 
+        # --- Top-k logits comparison (always shown) ---
         st.subheader("Final logits (last position)")
         st.plotly_chart(
             topk_logits_comparison(
@@ -291,6 +270,7 @@ if "targeted_results" in st.session_state:
             use_container_width=True,
         )
 
+        # --- Logit lens at intervention layer (always shown) ---
         st.subheader(f"Logit lens at layer {r['layer']} (resid_post)")
         st.plotly_chart(
             logit_lens_at_layer(
@@ -304,27 +284,55 @@ if "targeted_results" in st.session_state:
             use_container_width=True,
         )
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("Answer logit — all layers")
+        # --- Answer-token tracking (optional) ---
+        st.subheader("Per-token tracking (optional)")
+        st.caption(
+            "Enter an answer token to track its logit-lens score across all layers. "
+            "Also enables a logit-difference metric in the header."
+        )
+        _tok_col1, _tok_col2 = st.columns(2)
+        with _tok_col1:
+            answer_id = token_id_input(
+                model, "Answer token", key="tp_answer_tok",
+            ) if model_loaded else None
+        with _tok_col2:
+            distractor_id = token_id_input(
+                model, "Distractor (optional)", key="tp_distractor",
+                help="If set, metric = logit(answer) − logit(distractor).",
+            ) if model_loaded else None
+
+        if answer_id is not None:
+            # Show logit-diff metric
+            metric_fn = make_logit_diff_metric(model, answer_id, distractor_id)
+            m_orig = metric_fn(r["orig_logits"]).item()
+            m_patched = metric_fn(r["patched_logits"]).item()
+            delta = m_patched - m_orig
+
+            answer_str = model.tokenizer.decode(answer_id)
+            mc1, mc2 = st.columns(2)
+            mc1.metric("Metric — original", f"{m_orig:.4f}")
+            mc2.metric("Metric — patched", f"{m_patched:.4f}", delta=f"{delta:+.4f}")
+
             st.plotly_chart(
                 answer_logit_across_layers(
                     model, r["orig_cache"], r["patched_cache"],
-                    pos=r["pos_idx"], answer_token_id=r["answer_id"],
-                    title=f"Logit-lens score for {repr(r['answer_tok'])} at pos {r['pos_idx']}",
-                ),
-                use_container_width=True,
-            )
-        with col_b:
-            st.subheader("Residual stream norm — all layers")
-            st.plotly_chart(
-                residual_norm_across_layers(
-                    model, r["orig_cache"], r["patched_cache"],
-                    pos=r["pos_idx"],
+                    pos=r["pos_idx"], answer_token_id=answer_id,
+                    title=f"Logit-lens score for {repr(answer_str)} at pos {r['pos_idx']}",
                 ),
                 use_container_width=True,
             )
 
+        # --- Residual stream norm (always shown) ---
+        st.subheader("Residual stream norm — all layers")
+        st.plotly_chart(
+            residual_norm_across_layers(
+                model, r["orig_cache"], r["patched_cache"],
+                pos=r["pos_idx"],
+            ),
+            use_container_width=True,
+        )
+
+        # --- Attention patterns (always shown) ---
         st.divider()
         st.subheader("Attention patterns")
         st.caption(

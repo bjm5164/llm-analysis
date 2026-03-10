@@ -10,13 +10,14 @@ Workflow:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app_state import get_config, get_model, render_sidebar_memory, prompt_selector, token_id_input
 from attribution import head_attribution
 from model import run_with_cache, tokenize
 from viz_interactive import (
-    attention_pattern_heatmap,
-    attention_all_heads_heatmap,
+    attention_heads_cv,
+    attention_single_cv,
     attention_source_row,
 )
 
@@ -36,11 +37,13 @@ cfg = get_config()
 col_a, col_b = st.columns(2, gap="large")
 with col_a:
     prompt_a = prompt_selector(
-        "attn_prompt_a", label="Prompt A (baseline)", allow_empty=False,
+        "attn_prompt_a", label="Prompt A (baseline)",
+        allow_empty=False, sync_slot="a",
     )
 with col_b:
     prompt_b = prompt_selector(
         "attn_prompt_b", label="Prompt B (schema / OOD)",
+        sync_slot="b",
     )
 
 try:
@@ -162,51 +165,33 @@ if is_comparison:
                 "disrupted or redirected by schema tokens."
             )
 
-            n_show = st.slider("Heads to show", 1, min(12, len(ranked_heads)), 4, key="attn_n_ranked")
+            dla_prompt = st.radio(
+                "Prompt", ["Baseline", "Schema"],
+                horizontal=True, key="attn_dla_prompt",
+            )
+            dla_label = "A" if dla_prompt == "Baseline" else "B"
+
+            n_show = st.slider(
+                "Heads to show", 1, min(12, len(ranked_heads)), 4,
+                key="attn_n_ranked",
+            )
 
             for li, hi, diff_val in ranked_heads[:n_show]:
                 direction = "gained" if diff_val > 0 else "lost"
                 st.markdown(
-                    f"### L{li} H{hi} — {direction} {abs(diff_val):.4f} attribution"
+                    f"### L{li} H{hi} — {direction} "
+                    f"{abs(diff_val):.4f} attribution"
                 )
 
-                # Full-width stacked layout so tokens aren't cropped
-                for label, label_long in [("A", "Baseline"), ("B", "Schema")]:
-                    res = results[label]
-                    try:
-                        fig = attention_pattern_heatmap(
-                            res["cache"], li, hi, res["str_tokens"],
-                            title=f"L{li} H{hi} — {label_long}",
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"Cannot plot ({label_long}): {e}")
-
-                # Source-row comparison at the final token position
-                st.markdown(
-                    f"**Attention from final token** — where does L{li} H{hi} look "
-                    f"when predicting the next token?"
-                )
-                for label, label_long in [("A", "Baseline"), ("B", "Schema")]:
-                    res = results[label]
-                    str_toks = res["str_tokens"]
-                    try:
-                        pattern = (
-                            res["cache"]["pattern", li][0, hi]
-                            .detach().cpu().float().numpy()
-                        )
-                        last = len(str_toks) - 1
-                        attn_row = pattern[last, :len(str_toks)]
-                        st.plotly_chart(
-                            attention_source_row(
-                                attn_row, str_toks,
-                                dst_label=repr(str_toks[last]),
-                                title=f"{label_long} — final token attention",
-                            ),
-                            use_container_width=True,
-                        )
-                    except Exception as e:
-                        st.warning(f"Cannot plot source row ({label_long}): {e}")
+                res = results[dla_label]
+                dla_h = len(res["str_tokens"]) * 18 + 150
+                try:
+                    html = attention_single_cv(
+                        res["cache"], li, hi, res["str_tokens"],
+                    )
+                    components.html(html, height=dla_h, scrolling=False)
+                except Exception as e:
+                    st.warning(f"Cannot plot: {e}")
 
                 st.divider()
 
@@ -216,47 +201,48 @@ if is_comparison:
 with tab_explorer:
     st.markdown(
         "Browse attention patterns layer-by-layer. "
-        "In comparison mode, patterns are shown side-by-side."
+        "Select a head on the right to see the full pattern on the left."
     )
 
-    c1, c2 = st.columns([2, 2])
-    with c1:
+    # --- Controls row ---
+    ctrl_cols = st.columns([2, 2, 2] if is_comparison else [2, 2])
+    with ctrl_cols[0]:
         layer = st.slider("Layer", 0, n_layers - 1, 0, key="attn_exp_layer")
-    with c2:
-        head_opts = ["All heads"] + [f"Head {h}" for h in range(n_heads)]
-        head_sel = st.selectbox("Head", head_opts, key="attn_exp_head")
-
-    prompt_labels = [("A", "Baseline")] + ([("B", "Schema")] if is_comparison else [])
-
+    with ctrl_cols[1]:
+        exp_head = st.slider("Head", 0, n_heads - 1, 0, key="attn_exp_head")
     if is_comparison:
-        cols = st.columns(2)
+        with ctrl_cols[2]:
+            exp_prompt = st.radio(
+                "Prompt", ["Baseline", "Schema"],
+                horizontal=True, key="attn_exp_prompt",
+            )
+        exp_label = "A" if exp_prompt == "Baseline" else "B"
     else:
-        cols = [st.container()]
+        exp_label = "A"
 
-    for col, (label, label_long) in zip(cols, prompt_labels):
-        with col:
-            st.markdown(f"#### {label_long}")
-            res = results[label]
-            cache = res["cache"]
-            str_toks = res["str_tokens"]
+    res = results[exp_label]
+    cache = res["cache"]
+    str_toks = res["str_tokens"]
+    seq_len = len(str_toks)
 
-            try:
-                if head_sel == "All heads":
-                    st.plotly_chart(
-                        attention_all_heads_heatmap(cache, layer, str_toks),
-                        use_container_width=True,
-                    )
-                else:
-                    head = int(head_sel.split()[1])
-                    st.plotly_chart(
-                        attention_pattern_heatmap(
-                            cache, layer, head, str_toks,
-                            title=f"L{layer} H{head} ({label_long})",
-                        ),
-                        use_container_width=True,
-                    )
-            except Exception as e:
-                st.warning(f"Cannot plot ({label_long}): {e}")
+    # --- Two-column layout: expanded pattern | all-heads thumbnails ---
+    # CircuitsVis sizes: ~18px per cell + ~100px for labels/chrome
+    pattern_h = seq_len * 18 + 150
+    col_pattern, col_thumbs = st.columns([3, 2])
+
+    with col_pattern:
+        try:
+            html = attention_single_cv(cache, layer, exp_head, str_toks)
+            components.html(html, height=pattern_h, scrolling=False)
+        except Exception as e:
+            st.warning(f"Cannot plot single head: {e}")
+
+    with col_thumbs:
+        try:
+            html = attention_heads_cv(cache, layer, str_toks)
+            components.html(html, height=pattern_h, scrolling=True)
+        except Exception as e:
+            st.warning(f"Cannot plot head grid: {e}")
 
 # ---------------------------------------------------------------------------
 # Position Focus — attention to/from a specific token
@@ -268,13 +254,17 @@ with tab_focus:
         "schema tokens, content tokens, or structural delimiters."
     )
 
-    c1, c2, c3 = st.columns([2, 2, 2])
-    with c1:
-        focus_layer = st.slider("Layer", 0, n_layers - 1, 0, key="attn_focus_layer")
-    with c2:
-        focus_head = st.slider("Head", 0, n_heads - 1, 0, key="attn_focus_head")
-    with c3:
-        # Use baseline prompt length for position slider
+    n_ctrl = 4 if is_comparison else 3
+    focus_cols = st.columns(n_ctrl)
+    with focus_cols[0]:
+        focus_layer = st.slider(
+            "Layer", 0, n_layers - 1, 0, key="attn_focus_layer",
+        )
+    with focus_cols[1]:
+        focus_head = st.slider(
+            "Head", 0, n_heads - 1, 0, key="attn_focus_head",
+        )
+    with focus_cols[2]:
         max_pos = len(results["A"]["str_tokens"]) - 1
         focus_pos = st.slider(
             "Destination position",
@@ -282,39 +272,51 @@ with tab_focus:
             key="attn_focus_pos",
             help="Which query position's attention to show",
         )
+    if is_comparison:
+        with focus_cols[3]:
+            focus_prompt = st.radio(
+                "Prompt", ["Baseline", "Schema"],
+                horizontal=True, key="attn_focus_prompt",
+            )
+        focus_label = "A" if focus_prompt == "Baseline" else "B"
+        focus_label_long = focus_prompt
+    else:
+        focus_label = "A"
+        focus_label_long = "Baseline"
 
-    prompt_labels = [("A", "Baseline")] + ([("B", "Schema")] if is_comparison else [])
+    res = results[focus_label]
+    cache = res["cache"]
+    str_toks = res["str_tokens"]
+    pos = min(focus_pos, len(str_toks) - 1)
 
-    for label, label_long in prompt_labels:
-        res = results[label]
-        cache = res["cache"]
-        str_toks = res["str_tokens"]
-        pos = min(focus_pos, len(str_toks) - 1)
+    st.markdown(
+        f"**{focus_label_long}** — L{focus_layer} H{focus_head}, "
+        f"attention from pos {pos} `{repr(str_toks[pos])}`"
+    )
 
-        st.markdown(
-            f"**{label_long}** — L{focus_layer} H{focus_head}, "
-            f"attention from pos {pos} `{repr(str_toks[pos])}`"
+    try:
+        pattern = (
+            cache["pattern", focus_layer][0, focus_head]
+            .detach().cpu().float().numpy()
+        )
+        attn_row = pattern[pos, :len(str_toks)]
+        st.plotly_chart(
+            attention_source_row(
+                attn_row, str_toks,
+                dst_label=repr(str_toks[pos]),
+                title=(
+                    f"L{focus_layer} H{focus_head} "
+                    f"({focus_label_long}) — pos {pos}"
+                ),
+            ),
+            use_container_width=True,
         )
 
-        try:
-            pattern = cache["pattern", focus_layer][0, focus_head].detach().cpu().float().numpy()
-            attn_row = pattern[pos, :len(str_toks)]
-            st.plotly_chart(
-                attention_source_row(
-                    attn_row, str_toks,
-                    dst_label=repr(str_toks[pos]),
-                    title=f"L{focus_layer} H{focus_head} ({label_long}) — pos {pos}",
-                ),
-                use_container_width=True,
-            )
-
-            # Full pattern for context
-            st.plotly_chart(
-                attention_pattern_heatmap(
-                    cache, focus_layer, focus_head, str_toks,
-                    title=f"L{focus_layer} H{focus_head} ({label_long})",
-                ),
-                use_container_width=True,
-            )
-        except Exception as e:
-            st.warning(f"Cannot plot ({label_long}): {e}")
+        # Full pattern via CircuitsVis
+        html = attention_single_cv(
+            cache, focus_layer, focus_head, str_toks,
+        )
+        focus_h = len(str_toks) * 18 + 150
+        components.html(html, height=focus_h, scrolling=False)
+    except Exception as e:
+        st.warning(f"Cannot plot ({focus_label_long}): {e}")

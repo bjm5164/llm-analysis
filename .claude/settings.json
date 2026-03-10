@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_tokenization_edge_cases.py -v -k \"not model and not qwen_tokenizer\" --tb=short)",
+      "Bash(pip install pytest)",
+      "Bash(pytest tests/test_tokenization_edge_cases.py -v -k \"not model and not qwen_tokenizer\" --tb=short)",
+      "Bash(ls -la pyproject.toml requirements*.txt setup.py setup.cfg uv.lock)",
+      "Read(//home/bmark/.pyenv/versions/3.12.2/bin/**)"
+    ],
+    "additionalDirectories": [
+      "/home/bmark/Documents/Projects/llm-analysis/src/data"
+    ]
+  }
+}

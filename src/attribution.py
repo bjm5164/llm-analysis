@@ -27,9 +27,13 @@ def answer_residual_direction(
 
     This is the unembedding vector — the direction in residual space
     that the model's final linear layer uses to produce the answer logit.
+
+    The answer must resolve to exactly one token. Raises ValueError if
+    a string encodes to multiple tokens.
     """
     if isinstance(answer, str):
-        answer_tokens = model.to_tokens(answer, prepend_bos=False)
+        answer_id = _answer_token_id(model, answer)
+        answer_tokens = torch.tensor([[answer_id]], device=model.cfg.device)
     else:
         answer_tokens = torch.tensor([[answer]], device=model.cfg.device)
     return model.tokens_to_residual_directions(answer_tokens).squeeze(0)

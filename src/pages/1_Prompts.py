@@ -4,6 +4,8 @@ Explore tokenization and next-token predictions, then save prompts
 for use in DLA, Attention, and other analysis pages.
 """
 
+import html as html_mod
+
 import torch
 import streamlit as st
 
@@ -15,6 +17,8 @@ from app_state import (
     save_prompt,
     delete_prompt,
     clear_prompts,
+    export_prompts_json,
+    import_prompts_json,
 )
 from model import run_with_cache, tokenize
 
@@ -57,7 +61,7 @@ def _chips(text: str, prepend_bos: bool) -> None:
                 f"border-radius:4px;background:{bg};color:{color};"
                 f'font-family:monospace;font-size:0.83em;white-space:pre;">'
                 f'<sup style="color:#bbb;font-size:0.7em;margin-right:2px">{i}</sup>'
-                f"{repr(tok_str)}</span>"
+                f"{html_mod.escape(repr(tok_str))}</span>"
             )
         st.html(
             f"<div style='margin-bottom:4px'>{count_html}</div>"
@@ -157,3 +161,42 @@ else:
                 if st.button("Delete", key=f"del_{label}"):
                     delete_prompt(label)
                     st.rerun()
+
+# ---------------------------------------------------------------------------
+# Export / Import
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Export / Import")
+
+col_export, col_import = st.columns(2, gap="large")
+
+with col_export:
+    st.markdown("**Export**")
+    if get_saved_prompts():
+        st.download_button(
+            "Download prompts.json",
+            data=export_prompts_json(),
+            file_name="prompts.json",
+            mime="application/json",
+        )
+    else:
+        st.caption("Nothing to export.")
+
+with col_import:
+    st.markdown("**Import**")
+    uploaded = st.file_uploader(
+        "Upload prompts JSON",
+        type=["json"],
+        key="import_prompts_file",
+        label_visibility="collapsed",
+    )
+    merge = st.checkbox("Merge with existing prompts", value=True)
+    if uploaded is not None:
+        if st.button("Import", type="primary"):
+            try:
+                raw = uploaded.read().decode("utf-8")
+                n = import_prompts_json(raw, merge=merge)
+                st.success(f"Imported {n} prompt(s).")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Import failed: {exc}")

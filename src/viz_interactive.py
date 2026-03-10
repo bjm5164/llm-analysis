@@ -150,15 +150,22 @@ def attention_pattern_heatmap(
     str_tokens: list[str],
     title: str | None = None,
 ) -> go.Figure:
-    """Industry-standard attention heatmap for a single (layer, head) with cell values."""
-    pattern = cache["pattern", layer][0, head].detach().cpu().float().numpy()
+    """Plotly heatmap for a single (layer, head). Kept for non-interactive use."""
+    pattern = (
+        cache["pattern", layer][0, head].detach().cpu().float().numpy()
+    )
     seq_q, seq_k = pattern.shape
-    tok_labels_k = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_k)]
-    tok_labels_q = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_q)]
+    tok_labels_k = [
+        f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i)
+        for i in range(seq_k)
+    ]
+    tok_labels_q = [
+        f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i)
+        for i in range(seq_q)
+    ]
 
-    # Scale height with sequence length so cells stay readable
-    cell_px = max(18, min(40, 800 // max(seq_q, 1)))
-    fig_h = cell_px * seq_q + 120
+    cell_px = max(22, min(40, 800 // max(seq_q, 1)))
+    fig_h = cell_px * seq_q + 180
 
     fig = px.imshow(
         pattern,
@@ -168,67 +175,79 @@ def attention_pattern_heatmap(
         zmin=0,
         zmax=1,
         title=title or f"L{layer} H{head} Attention Pattern",
-        labels={"x": "Source (key)", "y": "Destination (query)", "color": "Attention"},
-        aspect="equal",
+        labels={
+            "x": "Source (key)",
+            "y": "Destination (query)",
+            "color": "Attention",
+        },
+        aspect="auto",
     )
-    fig.update_xaxes(tickangle=-45)
-    fig.update_layout(height=fig_h)
+    fig.update_xaxes(
+        tickangle=-45,
+        tickmode="array",
+        tickvals=list(range(seq_k)),
+        ticktext=tok_labels_k,
+        tickfont=dict(size=9),
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(seq_q)),
+        ticktext=tok_labels_q,
+        tickfont=dict(size=9),
+    )
+    fig.update_layout(height=fig_h, margin=dict(b=120, l=120))
     return fig
 
 
-def attention_all_heads_heatmap(
+# ------------------------------------------------------------------
+# CircuitsVis-based interactive attention visualizations
+# ------------------------------------------------------------------
+
+def attention_heads_cv(
     cache: ActivationCache,
     layer: int,
     str_tokens: list[str],
-    ncols: int = 4,
-) -> go.Figure:
-    """Grid of attention patterns for all heads in a layer."""
-    from plotly.subplots import make_subplots
+    mask_upper_tri: bool = True,
+) -> str:
+    """CircuitsVis interactive multi-head attention widget.
 
-    patterns = cache["pattern", layer][0].detach().cpu().float().numpy()
-    n_heads = patterns.shape[0]
-    seq_len = patterns.shape[2]
-    tok_labels = [f"{i}:{repr(str_tokens[i])}" if i < len(str_tokens) else str(i) for i in range(seq_len)]
+    Returns an HTML string for embedding via st.components.v1.html().
+    Click a thumbnail to expand the full pattern with hover values.
+    """
+    from circuitsvis.attention import attention_heads
 
-    ncols = min(ncols, n_heads)
-    nrows = (n_heads + ncols - 1) // ncols
-
-    fig = make_subplots(
-        rows=nrows,
-        cols=ncols,
-        subplot_titles=[f"H{h}" for h in range(n_heads)],
+    # attention shape expected: [n_heads, dest, src]
+    patterns = (
+        cache["pattern", layer][0].detach().cpu().float()
     )
-
-    for h in range(n_heads):
-        row = h // ncols + 1
-        col = h % ncols + 1
-        fig.add_trace(
-            go.Heatmap(
-                z=patterns[h],
-                x=tok_labels,
-                y=tok_labels,
-                colorscale="Blues",
-                zmin=0,
-                zmax=1,
-                showscale=(h == 0),
-                hovertemplate="src: %{x}<br>dst: %{y}<br>attn: %{z:.3f}<extra></extra>",
-            ),
-            row=row,
-            col=col,
-        )
-
-    subplot_px = max(100, min(200, 1200 // max(seq_len, 1)))
-    fig.update_layout(
-        title=f"Layer {layer} — All Attention Heads",
-        height=subplot_px * nrows + 80,
+    html_obj = attention_heads(
+        attention=patterns,
+        tokens=str_tokens,
+        mask_upper_tri=mask_upper_tri,
     )
-    for ax in fig.layout:
-        if ax.startswith("xaxis"):
-            fig.layout[ax].tickangle = -45
-            fig.layout[ax].tickfont = dict(size=8)
-        if ax.startswith("yaxis"):
-            fig.layout[ax].tickfont = dict(size=8)
-    return fig
+    return str(html_obj)
+
+
+def attention_single_cv(
+    cache: ActivationCache,
+    layer: int,
+    head: int,
+    str_tokens: list[str],
+    mask_upper_tri: bool = True,
+) -> str:
+    """CircuitsVis single-head attention pattern.
+
+    Returns an HTML string.
+    """
+    from circuitsvis.attention import attention_pattern
+
+    pattern = cache["pattern", layer][0, head].detach().cpu().float()
+    html_obj = attention_pattern(
+        tokens=str_tokens,
+        attention=pattern,
+        mask_upper_tri=mask_upper_tri,
+    )
+    return str(html_obj)
 
 
 def attention_source_row(
@@ -242,7 +261,8 @@ def attention_source_row(
     Shows a horizontal bar: [the] [cat] [crossed] [the] [road]
     each box colored by how much the destination token attends to it.
     """
-    tok_labels = [repr(t) for t in str_tokens[: len(attn_weights)]]
+    n_toks = len(attn_weights)
+    tok_labels = [repr(t) for t in str_tokens[:n_toks]]
     fig = px.imshow(
         attn_weights[np.newaxis, :],
         x=tok_labels,
@@ -254,10 +274,17 @@ def attention_source_row(
         labels={"color": "Attention"},
         aspect="auto",
     )
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(n_toks)),
+        ticktext=tok_labels,
+        tickangle=-45,
+        tickfont=dict(size=9),
+    )
     fig.update_layout(
         title=title or f"Attention from {dst_label}",
-        height=120,
-        margin=dict(t=40, b=10, l=60, r=20),
+        height=160,
+        margin=dict(t=40, b=80, l=60, r=20),
     )
     fig.update_yaxes(showticklabels=True, tickfont_size=10)
     fig.update_traces(textfont_size=10)

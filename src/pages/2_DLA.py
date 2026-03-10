@@ -12,7 +12,11 @@ Workflow:
 
 import streamlit as st
 
-from app_state import get_config, get_model, render_sidebar_memory, prompt_selector, token_id_input
+from app_state import (
+    get_config, get_model, render_sidebar_memory,
+    prompt_selector, token_id_input,
+    get_active_prompts, set_active_answer,
+)
 from attribution import component_attribution, final_logit_margin, head_attribution
 from model import run_with_cache, tokenize
 from viz_interactive import (
@@ -37,9 +41,15 @@ cfg = get_config()
 # ---------------------------------------------------------------------------
 col_a, col_b = st.columns(2, gap="large")
 with col_a:
-    prompt_a = prompt_selector("dla_prompt_a", label="Prompt A (baseline)", allow_empty=False)
+    prompt_a = prompt_selector(
+        "dla_prompt_a", label="Prompt A (baseline)",
+        allow_empty=False, sync_slot="a",
+    )
 with col_b:
-    prompt_b = prompt_selector("dla_prompt_b", label="Prompt B (schema / OOD)")
+    prompt_b = prompt_selector(
+        "dla_prompt_b", label="Prompt B (schema / OOD)",
+        sync_slot="b",
+    )
 
 try:
     _model = get_model()
