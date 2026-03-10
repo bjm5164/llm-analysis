@@ -262,20 +262,32 @@ def attention_single_cv(
     head: int,
     str_tokens: list[str],
     mask_upper_tri: bool = True,
+    max_width: int | None = None,
+    positive_color: str | None = None,
 ) -> str:
     """CircuitsVis single-head attention pattern.
 
-    Returns an HTML string.
+    Returns an HTML string.  *max_width* (px) constrains the widget width.
     """
     from circuitsvis.attention import attention_pattern
 
     pattern = cache["pattern", layer][0, head].detach().cpu().float()
-    html_obj = attention_pattern(
+    kwargs: dict = dict(
         tokens=str_tokens,
         attention=pattern,
         mask_upper_tri=mask_upper_tri,
     )
-    return _wrap_cv(str(html_obj))
+    if positive_color is not None:
+        kwargs["positive_color"] = positive_color
+    html_obj = attention_pattern(**kwargs)
+    html = _wrap_cv(str(html_obj))
+    if max_width is not None:
+        html = (
+            f'<div style="max-width:{max_width}px;margin:0 auto">'
+            + html
+            + "</div>"
+        )
+    return html
 
 
 def attention_source_row(
@@ -326,20 +338,34 @@ def topk_logits_comparison(
     pos: int = -1,
     k: int = 10,
     title: str = "Top-k final logits: original vs patched",
+    rank_by: str = "original",
 ) -> go.Figure:
-    """Grouped bar chart of top-k tokens by original logit, before and after intervention."""
+    """Grouped bar chart of top-k tokens, before and after intervention.
+
+    Args:
+        rank_by: Which logits determine the top-k ranking.
+            "original" ranks by pre-intervention logits,
+            "patched" ranks by post-intervention logits.
+    """
     orig = orig_logits[0, pos, :].detach().cpu().float()
     patched = patched_logits[0, pos, :].detach().cpu().float()
 
-    top_ids = orig.topk(k).indices
+    ranking = orig if rank_by == "original" else patched
+    top_ids = ranking.topk(k).indices
     labels = [
-        repr(model.tokenizer.decode([i.item()])) or f"[{i.item()}]"
+        f"{i.item()}:{repr(model.tokenizer.decode([i.item()]))}"
         for i in top_ids
     ]
 
     fig = go.Figure([
-        go.Bar(name="Original", x=labels, y=orig[top_ids].tolist(), marker_color="#3498db"),
-        go.Bar(name="Patched",  x=labels, y=patched[top_ids].tolist(), marker_color="#e74c3c"),
+        go.Bar(
+            name="Original", x=labels,
+            y=orig[top_ids].tolist(), marker_color="#3498db",
+        ),
+        go.Bar(
+            name="Patched", x=labels,
+            y=patched[top_ids].tolist(), marker_color="#e74c3c",
+        ),
     ])
     fig.update_layout(
         barmode="group",
@@ -348,9 +374,9 @@ def topk_logits_comparison(
         xaxis_type="category",
         yaxis_title="Logit",
         xaxis_tickangle=-40,
-        height=380,
+        height=420,
         legend=dict(orientation="h", y=1.02, x=0),
-        margin=dict(t=60),
+        margin=dict(t=60, b=80),
     )
     return fig
 

@@ -18,9 +18,11 @@ from app_state import (
     prompt_selector, prompt_tokenize, token_id_input,
 )
 from patching import make_logit_diff_metric, targeted_intervention
+import streamlit.components.v1 as st_components
+
 from viz_interactive import (
     answer_logit_across_layers,
-    attention_pattern_heatmap,
+    attention_single_cv,
     logit_lens_at_layer,
     residual_norm_across_layers,
     topk_logits_comparison,
@@ -274,11 +276,17 @@ if "targeted_results" in st.session_state:
         st.plotly_chart(
             topk_logits_comparison(
                 model, r["orig_logits"], r["patched_logits"],
-                pos=-1, k=k,
-                title=(
-                    f"Top-{k} next-token logits at last position"
-                    f" — intervened at pos {r['pos_idx']} ({tok_label})"
-                ),
+                pos=-1, k=k, rank_by="original",
+                title="Ranked by original",
+            ),
+            use_container_width=True,
+        )
+        st.divider()
+        st.plotly_chart(
+            topk_logits_comparison(
+                model, r["orig_logits"], r["patched_logits"],
+                pos=-1, k=k, rank_by="patched",
+                title="Ranked by patched",
             ),
             use_container_width=True,
         )
@@ -353,40 +361,33 @@ if "targeted_results" in st.session_state:
             "Select any layer and head — defaults to the intervention target."
         )
 
-        _ap_col1, _ap_col2 = st.columns(2)
-        with _ap_col1:
+        _ap_c1, _ap_c2, _ap_c3 = st.columns(3)
+        with _ap_c1:
             _ap_layer = st.slider(
                 "Attn layer", 0, max(0, n_layers - 1),
                 value=r["layer"],
                 key="ap_layer",
             )
-        with _ap_col2:
+        with _ap_c2:
             _ap_head = st.slider(
                 "Attn head", 0, max(0, n_heads - 1),
                 value=r["head"] if r["head"] is not None else 0,
                 key="ap_head",
             )
-
-        st.markdown("**Before intervention**")
-        try:
-            st.plotly_chart(
-                attention_pattern_heatmap(
-                    r["orig_cache"], _ap_layer, _ap_head, r["str_toks"],
-                    title=f"L{_ap_layer} H{_ap_head} — original",
-                ),
-                use_container_width=True,
+        with _ap_c3:
+            _ap_view = st.radio(
+                "View", ["Before", "After"],
+                horizontal=True, key="ap_view",
             )
-        except Exception as _e:
-            st.warning(f"Cannot plot: {_e}")
 
-        st.markdown("**After intervention**")
+        _ap_cache = (
+            r["orig_cache"] if _ap_view == "Before"
+            else r["patched_cache"]
+        )
         try:
-            st.plotly_chart(
-                attention_pattern_heatmap(
-                    r["patched_cache"], _ap_layer, _ap_head, r["str_toks"],
-                    title=f"L{_ap_layer} H{_ap_head} — patched",
-                ),
-                use_container_width=True,
+            _ap_html = attention_single_cv(
+                _ap_cache, _ap_layer, _ap_head, r["str_toks"],
             )
+            st_components.html(_ap_html, height=600, scrolling=True)
         except Exception as _e:
             st.warning(f"Cannot plot: {_e}")

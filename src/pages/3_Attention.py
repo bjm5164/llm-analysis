@@ -178,34 +178,44 @@ if is_comparison:
                 "disrupted or redirected by schema tokens."
             )
 
-            dla_prompt = st.radio(
-                "Prompt", ["Baseline", "Schema"],
-                horizontal=True, key="attn_dla_prompt",
-            )
-            dla_label = "A" if dla_prompt == "Baseline" else "B"
-
             n_show = st.slider(
                 "Heads to show", 1, min(12, len(ranked_heads)), 4,
                 key="attn_n_ranked",
             )
 
-            for li, hi, diff_val in ranked_heads[:n_show]:
-                direction = "gained" if diff_val > 0 else "lost"
-                st.markdown(
-                    f"### L{li} H{hi} — {direction} "
-                    f"{abs(diff_val):.4f} attribution"
-                )
+            head_options = [
+                f"L{li} H{hi} — {'gained' if dv > 0 else 'lost'} {abs(dv):.4f}"
+                for li, hi, dv in ranked_heads[:n_show]
+            ]
 
-                res = results[dla_label]
-                try:
-                    html = attention_single_cv(
-                        res["cache"], li, hi, res["str_tokens"],
-                    )
-                    components.html(html, height=1000, scrolling=False)
-                except Exception as e:
-                    st.warning(f"Cannot plot: {e}")
+            dla_head_idx = st.radio(
+                "Head", head_options,
+                key="attn_dla_head",
+            )
 
-                st.divider()
+            sel = head_options.index(dla_head_idx)
+            li, hi, diff_val = ranked_heads[sel]
+
+            col_base, col_schema = st.columns(2)
+            for col, (label, label_long, color) in zip(
+                [col_base, col_schema],
+                [("A", "Baseline", "#2563eb"), ("B", "Schema", "#dc2626")],
+            ):
+                with col:
+                    st.markdown(f"**{label_long}** — L{li} H{hi}")
+                    res = results[label]
+                    try:
+                        html = attention_single_cv(
+                            res["cache"], li, hi,
+                            res["str_tokens"],
+                            max_width=688,
+                            positive_color=color,
+                        )
+                        components.html(
+                            html, height=688, scrolling=True,
+                        )
+                    except Exception as e:
+                        st.warning(f"Cannot plot: {e}")
 
 # ---------------------------------------------------------------------------
 # Layer Explorer

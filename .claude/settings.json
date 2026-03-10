@@ -11,7 +11,8 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/2_DLA.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/3_Attention.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/4_Targeted_Patching.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(python -c \"from circuitsvis.attention import attention_pattern; help\\(attention_pattern\\)\")"
     ],
     "additionalDirectories": [
       "/home/bmark/Documents/Projects/llm-analysis/src/data"
