@@ -5,7 +5,13 @@
       "Bash(pip install pytest)",
       "Bash(pytest tests/test_tokenization_edge_cases.py -v -k \"not model and not qwen_tokenizer\" --tb=short)",
       "Bash(ls -la pyproject.toml requirements*.txt setup.py setup.cfg uv.lock)",
-      "Read(//home/bmark/.pyenv/versions/3.12.2/bin/**)"
+      "Read(//home/bmark/.pyenv/versions/3.12.2/bin/**)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/app_state.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/1_Prompts.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/2_DLA.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/3_Attention.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/4_Targeted_Patching.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python3 -c \":*)"
     ],
     "additionalDirectories": [
       "/home/bmark/Documents/Projects/llm-analysis/src/data"

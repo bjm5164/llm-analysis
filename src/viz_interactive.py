@@ -203,6 +203,34 @@ def attention_pattern_heatmap(
 # CircuitsVis-based interactive attention visualizations
 # ------------------------------------------------------------------
 
+# Script injected after every CircuitsVis widget to auto-resize the
+# Streamlit iframe to match the rendered content height.  Uses a
+# ResizeObserver so the iframe grows/shrinks when the user clicks a
+# thumbnail to expand or collapse a head.
+_RESIZE_SCRIPT = """
+<script>
+(function() {
+  function resize() {
+    var h = document.body.scrollHeight;
+    if (window.frameElement) {
+      window.frameElement.style.height = h + "px";
+    }
+  }
+  // Initial resize after CircuitsVis renders (async module load).
+  setTimeout(resize, 500);
+  setTimeout(resize, 1500);
+  // Continuous resize on DOM changes (expand/collapse).
+  new ResizeObserver(resize).observe(document.body);
+})();
+</script>
+"""
+
+
+def _wrap_cv(raw_html: str) -> str:
+    """Wrap CircuitsVis HTML with auto-resize script."""
+    return raw_html + _RESIZE_SCRIPT
+
+
 def attention_heads_cv(
     cache: ActivationCache,
     layer: int,
@@ -225,7 +253,7 @@ def attention_heads_cv(
         tokens=str_tokens,
         mask_upper_tri=mask_upper_tri,
     )
-    return str(html_obj)
+    return _wrap_cv(str(html_obj))
 
 
 def attention_single_cv(
@@ -247,7 +275,7 @@ def attention_single_cv(
         attention=pattern,
         mask_upper_tri=mask_upper_tri,
     )
-    return str(html_obj)
+    return _wrap_cv(str(html_obj))
 
 
 def attention_source_row(

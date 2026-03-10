@@ -13,8 +13,10 @@ noise injection, or activation patching), and inspect the effect on:
 import torch
 import streamlit as st
 
-from app_state import get_config, get_model, render_sidebar_memory, prompt_selector, token_id_input
-from model import tokenize
+from app_state import (
+    get_config, get_model, render_sidebar_memory,
+    prompt_selector, prompt_tokenize, token_id_input,
+)
 from patching import make_logit_diff_metric, targeted_intervention
 from viz_interactive import (
     answer_logit_across_layers,
@@ -62,8 +64,8 @@ with col_target:
         allow_empty=False, sync_slot="a",
     )
     if model_loaded and target_text:
-        _tt, _st_toks = tokenize(
-            model, target_text, prepend_bos=cfg.model.prepend_bos,
+        _tt, _st_toks = prompt_tokenize(
+            model, "tp_target_prompt", cfg.model.prepend_bos,
         )
         st.caption(
             f"{_tt.shape[1]} tokens: "
@@ -77,8 +79,13 @@ with col_source:
         sync_slot="b",
     )
     if model_loaded and source_text:
-        _ts, _ss_toks = tokenize(model, source_text, prepend_bos=cfg.model.prepend_bos)
-        st.caption(f"{_ts.shape[1]} tokens: {' '.join(repr(t) for t in _ss_toks)}")
+        _ts, _ss_toks = prompt_tokenize(
+            model, "tp_source_prompt", cfg.model.prepend_bos,
+        )
+        st.caption(
+            f"{_ts.shape[1]} tokens: "
+            f"{' '.join(repr(t) for t in _ss_toks)}"
+        )
 
 st.divider()
 
@@ -130,7 +137,9 @@ with col_ctrl:
     # Position selector for target prompt
     source_pos_idx = None
     if model_loaded and target_text:
-        _tokens, _str_toks = tokenize(model, target_text, prepend_bos=cfg.model.prepend_bos)
+        _tokens, _str_toks = prompt_tokenize(
+            model, "tp_target_prompt", cfg.model.prepend_bos,
+        )
         n_pos = _tokens.shape[1]
         pos_labels = [f"[{i}] {repr(t)}" for i, t in enumerate(_str_toks)]
         pos_idx = st.selectbox(
@@ -147,8 +156,8 @@ with col_ctrl:
         if not source_text:
             st.warning("Select a source prompt for patch intervention.")
         elif model_loaded:
-            _src_tokens, _src_str_toks = tokenize(
-                model, source_text, prepend_bos=cfg.model.prepend_bos,
+            _src_tokens, _src_str_toks = prompt_tokenize(
+                model, "tp_source_prompt", cfg.model.prepend_bos,
             )
             _src_n_pos = _src_tokens.shape[1]
             _src_labels = [f"[{i}] {repr(t)}" for i, t in enumerate(_src_str_toks)]
@@ -183,12 +192,16 @@ if run:
 
     progress = st.progress(0, text="Tokenizing...")
     try:
-        tokens, str_toks = tokenize(model, target_text, prepend_bos=cfg.model.prepend_bos)
+        tokens, str_toks = prompt_tokenize(
+            model, "tp_target_prompt", cfg.model.prepend_bos,
+        )
 
         source_cache = None
         if intervention == "patch":
             progress.progress(0.2, text="Caching source activations...")
-            src_tokens, _ = tokenize(model, source_text, prepend_bos=cfg.model.prepend_bos)
+            src_tokens, _ = prompt_tokenize(
+                model, "tp_source_prompt", cfg.model.prepend_bos,
+            )
             with torch.no_grad():
                 _, source_cache = model.run_with_cache(src_tokens)
 

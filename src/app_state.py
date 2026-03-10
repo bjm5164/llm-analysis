@@ -107,24 +107,42 @@ def hard_reset():
 
 # ---------------------------------------------------------------------------
 # Prompt library — shared across all pages, persisted to disk as JSON
+#
+# Each entry is: {label: {"text": str, "token_ids": list[int] | None}}
+#   - text:      human-readable concatenation of decoded tokens
+#   - token_ids:  authoritative token sequence (if built token-by-token)
+#                 None for prompts entered as plain text
+#
+# Old format ({label: str}) is auto-migrated on load.
 # ---------------------------------------------------------------------------
 _PROMPT_LIBRARY_KEY = "prompt_library"
 _PROMPTS_FILE = Path(__file__).resolve().parent / "data" / "prompts.json"
 
 
-def _load_prompts_from_disk() -> dict[str, str]:
+def _migrate_entry(value) -> dict:
+    """Normalise a library entry to {"text": str, "token_ids": ...}."""
+    if isinstance(value, str):
+        return {"text": value, "token_ids": None}
+    if isinstance(value, dict) and "text" in value:
+        return value
+    return {"text": str(value), "token_ids": None}
+
+
+def _load_prompts_from_disk() -> dict[str, dict]:
     """Load prompts from JSON file, returning empty dict if missing."""
     if _PROMPTS_FILE.exists():
         try:
-            data = json.loads(_PROMPTS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(
+                _PROMPTS_FILE.read_text(encoding="utf-8"),
+            )
             if isinstance(data, dict):
-                return data
+                return {k: _migrate_entry(v) for k, v in data.items()}
         except (json.JSONDecodeError, OSError):
             pass
     return {}
 
 
-def _save_prompts_to_disk(prompts: dict[str, str]) -> None:
+def _save_prompts_to_disk(prompts: dict[str, dict]) -> None:
     """Persist current prompt library to JSON."""
     _PROMPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     _PROMPTS_FILE.write_text(
@@ -133,16 +151,44 @@ def _save_prompts_to_disk(prompts: dict[str, str]) -> None:
     )
 
 
-def get_saved_prompts() -> dict[str, str]:
-    """Return the prompt library {label: text}."""
+def get_saved_prompts() -> dict[str, dict]:
+    """Return the prompt library {label: {"text", "token_ids"}}."""
     if _PROMPT_LIBRARY_KEY not in st.session_state:
         st.session_state[_PROMPT_LIBRARY_KEY] = _load_prompts_from_disk()
-    return st.session_state[_PROMPT_LIBRARY_KEY]
+    lib = st.session_state[_PROMPT_LIBRARY_KEY]
+    # In-place migration for any old-format entries still in session
+    for k, v in list(lib.items()):
+        if isinstance(v, str):
+            lib[k] = _migrate_entry(v)
+    return lib
 
 
-def save_prompt(label: str, text: str) -> None:
+def get_prompt_text(label: str) -> str:
+    """Return the text for a prompt label, or empty string."""
+    entry = get_saved_prompts().get(label)
+    if entry is None:
+        return ""
+    return entry["text"]
+
+
+def get_prompt_token_ids(label: str) -> list[int] | None:
+    """Return stored token IDs for a prompt, or None if text-only."""
+    entry = get_saved_prompts().get(label)
+    if entry is None:
+        return None
+    return entry.get("token_ids")
+
+
+def save_prompt(
+    label: str,
+    text: str,
+    token_ids: list[int] | None = None,
+) -> None:
     """Add or overwrite a prompt in the library."""
-    get_saved_prompts()[label] = text
+    get_saved_prompts()[label] = {
+        "text": text,
+        "token_ids": token_ids,
+    }
     _save_prompts_to_disk(get_saved_prompts())
 
 
@@ -317,7 +363,48 @@ def prompt_selector(
     if sync_slot and choice:
         set_active_prompt(sync_slot, choice)
 
-    return prompts.get(choice, "")
+    entry = prompts.get(choice)
+    if entry is None:
+        return ""
+    return entry["text"] if isinstance(entry, dict) else entry
+
+
+def selected_prompt_label(key: str) -> str:
+    """Return the label currently chosen in a prompt_selector widget."""
+    return st.session_state.get(key, "")
+
+
+def prompt_tokenize(
+    model,
+    selector_key: str,
+    prepend_bos: bool,
+) -> tuple[torch.Tensor, list[str]]:
+    """Tokenize the prompt selected in a prompt_selector widget.
+
+    If the library entry has stored token_ids (built token-by-token),
+    those are used directly — preserving the exact token boundaries the
+    user chose (e.g. three separate tokens '"', ':', '"' instead of
+    the merged '":"' the tokenizer would normally produce).
+
+    Falls back to standard text tokenization otherwise.
+    """
+    from model import tokenize
+
+    label = selected_prompt_label(selector_key)
+    token_ids = get_prompt_token_ids(label) if label else None
+
+    if token_ids is not None:
+        ids = list(token_ids)
+        if prepend_bos:
+            bos = model.tokenizer.bos_token_id
+            if bos is not None:
+                ids = [bos] + ids
+        tokens = torch.tensor([ids], device=model.cfg.device)
+        str_tokens = [model.tokenizer.decode(t) for t in ids]
+        return tokens, str_tokens
+
+    text = get_prompt_text(label) if label else ""
+    return tokenize(model, text, prepend_bos=prepend_bos)
 
 
 def export_prompts_json() -> str:
@@ -328,17 +415,21 @@ def export_prompts_json() -> str:
 def import_prompts_json(raw: str, merge: bool = True) -> int:
     """Import prompts from a JSON string. Returns count of prompts added.
 
+    Accepts both old format ({label: text}) and new format
+    ({label: {text, token_ids}}).
+
     If merge=True, existing prompts are kept and new ones are added/updated.
     If merge=False, the library is replaced entirely.
     """
     data = json.loads(raw)
     if not isinstance(data, dict):
-        raise ValueError("Expected a JSON object {label: prompt_text}")
+        raise ValueError("Expected a JSON object {label: ...}")
+    migrated = {k: _migrate_entry(v) for k, v in data.items()}
     if merge:
         prompts = get_saved_prompts()
-        prompts.update(data)
+        prompts.update(migrated)
     else:
-        st.session_state[_PROMPT_LIBRARY_KEY] = data
+        st.session_state[_PROMPT_LIBRARY_KEY] = migrated
     _save_prompts_to_disk(get_saved_prompts())
     return len(data)
 

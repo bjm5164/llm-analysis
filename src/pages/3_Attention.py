@@ -12,9 +12,12 @@ Workflow:
 import streamlit as st
 import streamlit.components.v1 as components
 
-from app_state import get_config, get_model, render_sidebar_memory, prompt_selector, token_id_input
+from app_state import (
+    get_config, get_model, render_sidebar_memory,
+    prompt_selector, prompt_tokenize, token_id_input,
+)
 from attribution import head_attribution
-from model import run_with_cache, tokenize
+from model import run_with_cache
 from viz_interactive import (
     attention_heads_cv,
     attention_single_cv,
@@ -78,8 +81,7 @@ with col2:
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
-def _run_one(model, prompt: str, answer_token_id: int | None) -> dict:
-    tokens, str_tokens = tokenize(model, prompt, prepend_bos=cfg.model.prepend_bos)
+def _run_one(model, tokens, str_tokens, answer_token_id: int | None) -> dict:
     _, cache = run_with_cache(model, tokens, strategy="full")
     result = {
         "tokens": tokens,
@@ -100,9 +102,20 @@ if run:
     with st.spinner("Caching activations…"):
         try:
             model = get_model()
-            store = {"A": _run_one(model, prompt_a, answer_id)}
+            bos = cfg.model.prepend_bos
+            toks_a, st_a = prompt_tokenize(
+                model, "attn_prompt_a", bos,
+            )
+            store = {
+                "A": _run_one(model, toks_a, st_a, answer_id),
+            }
             if prompt_b and prompt_b.strip():
-                store["B"] = _run_one(model, prompt_b, answer_id)
+                toks_b, st_b = prompt_tokenize(
+                    model, "attn_prompt_b", bos,
+                )
+                store["B"] = _run_one(
+                    model, toks_b, st_b, answer_id,
+                )
             st.session_state["attn_results"] = store
         except Exception as e:
             st.error(f"Error: {e}")
@@ -184,12 +197,11 @@ if is_comparison:
                 )
 
                 res = results[dla_label]
-                dla_h = len(res["str_tokens"]) * 18 + 150
                 try:
                     html = attention_single_cv(
                         res["cache"], li, hi, res["str_tokens"],
                     )
-                    components.html(html, height=dla_h, scrolling=False)
+                    components.html(html, height=1000, scrolling=False)
                 except Exception as e:
                     st.warning(f"Cannot plot: {e}")
 
@@ -201,17 +213,19 @@ if is_comparison:
 with tab_explorer:
     st.markdown(
         "Browse attention patterns layer-by-layer. "
-        "Select a head on the right to see the full pattern on the left."
+        "Hover over a head thumbnail to preview; click to lock. "
+        "Toggle between Baseline and Schema with the radio button."
     )
 
     # --- Controls row ---
-    ctrl_cols = st.columns([2, 2, 2] if is_comparison else [2, 2])
-    with ctrl_cols[0]:
-        layer = st.slider("Layer", 0, n_layers - 1, 0, key="attn_exp_layer")
-    with ctrl_cols[1]:
-        exp_head = st.slider("Head", 0, n_heads - 1, 0, key="attn_exp_head")
     if is_comparison:
-        with ctrl_cols[2]:
+        ctrl_l, ctrl_p = st.columns([3, 2])
+    else:
+        ctrl_l = st.container()
+    with ctrl_l:
+        layer = st.slider("Layer", 0, n_layers - 1, 0, key="attn_exp_layer")
+    if is_comparison:
+        with ctrl_p:
             exp_prompt = st.radio(
                 "Prompt", ["Baseline", "Schema"],
                 horizontal=True, key="attn_exp_prompt",
@@ -225,24 +239,15 @@ with tab_explorer:
     str_toks = res["str_tokens"]
     seq_len = len(str_toks)
 
-    # --- Two-column layout: expanded pattern | all-heads thumbnails ---
-    # CircuitsVis sizes: ~18px per cell + ~100px for labels/chrome
-    pattern_h = seq_len * 18 + 150
-    col_pattern, col_thumbs = st.columns([3, 2])
-
-    with col_pattern:
-        try:
-            html = attention_single_cv(cache, layer, exp_head, str_toks)
-            components.html(html, height=pattern_h, scrolling=False)
-        except Exception as e:
-            st.warning(f"Cannot plot single head: {e}")
-
-    with col_thumbs:
-        try:
-            html = attention_heads_cv(cache, layer, str_toks)
-            components.html(html, height=pattern_h, scrolling=True)
-        except Exception as e:
-            st.warning(f"Cannot plot head grid: {e}")
+    # Full-width CircuitsVis widget — it manages its own
+    # thumbnail grid + expanded detail view internally.
+    try:
+        html = attention_heads_cv(cache, layer, str_toks)
+        # Large initial height — the injected ResizeObserver will
+        # shrink the iframe to fit once CircuitsVis renders.
+        components.html(html, height=1500, scrolling=False)
+    except Exception as e:
+        st.warning(f"Cannot plot: {e}")
 
 # ---------------------------------------------------------------------------
 # Position Focus — attention to/from a specific token
@@ -316,7 +321,6 @@ with tab_focus:
         html = attention_single_cv(
             cache, focus_layer, focus_head, str_toks,
         )
-        focus_h = len(str_toks) * 18 + 150
-        components.html(html, height=focus_h, scrolling=False)
+        components.html(html, height=1000, scrolling=False)
     except Exception as e:
         st.warning(f"Cannot plot ({focus_label_long}): {e}")

@@ -14,11 +14,11 @@ import streamlit as st
 
 from app_state import (
     get_config, get_model, render_sidebar_memory,
-    prompt_selector, token_id_input,
+    prompt_selector, prompt_tokenize, token_id_input,
     get_active_prompts, set_active_answer,
 )
 from attribution import component_attribution, final_logit_margin, head_attribution
-from model import run_with_cache, tokenize
+from model import run_with_cache
 from viz_interactive import (
     tokenization_table,
     component_attribution_bar,
@@ -88,9 +88,8 @@ with col2:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _run_one(model, prompt: str, answer_id: int, strategy: str) -> dict:
+def _run_one(model, tokens, str_tokens, answer_id: int, strategy: str) -> dict:
     """Run a single prompt and collect DLA results."""
-    tokens, str_tokens = tokenize(model, prompt, prepend_bos=cfg.model.prepend_bos)
     logits, cache = run_with_cache(model, tokens, strategy=strategy)
     margin = final_logit_margin(model, logits, answer_id)
     comp_attrs, comp_labels = component_attribution(model, cache, answer_id, pos=-1)
@@ -125,9 +124,22 @@ if run:
             model = get_model()
             answer_str = model.tokenizer.decode(answer_id)
             strategy = cfg.model.cache_strategy
-            results = {"A": _run_one(model, prompt_a, answer_id, strategy)}
+            bos = cfg.model.prepend_bos
+            toks_a, st_a = prompt_tokenize(
+                model, "dla_prompt_a", bos,
+            )
+            results = {
+                "A": _run_one(
+                    model, toks_a, st_a, answer_id, strategy,
+                ),
+            }
             if prompt_b and prompt_b.strip():
-                results["B"] = _run_one(model, prompt_b, answer_id, strategy)
+                toks_b, st_b = prompt_tokenize(
+                    model, "dla_prompt_b", bos,
+                )
+                results["B"] = _run_one(
+                    model, toks_b, st_b, answer_id, strategy,
+                )
 
             store = {"results": results, "answer_tok": answer_str}
 
