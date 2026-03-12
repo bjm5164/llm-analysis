@@ -133,8 +133,11 @@ with col_ctrl:
     )
 
     noise_std = 1.0
+    noise_scale = 1.0
     if intervention == "noise":
         noise_std = st.slider("Noise std", 0.01, 10.0, value=1.0, step=0.05)
+        noise_scale = st.slider("Noise magnitude", 0.01, 10.0, value=1.0, step=0.05,
+                                help="Multiplier applied to the noise vector after sampling")
 
     # Position selector for target prompt
     source_pos_idx = None
@@ -219,6 +222,7 @@ if run:
             head=head,
             neuron=neuron,
             noise_std=noise_std,
+            noise_scale=noise_scale,
             source_cache=source_cache,
             source_pos=source_pos_idx,
         )

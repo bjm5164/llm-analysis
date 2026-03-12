@@ -3,14 +3,18 @@
 Explore tokenization and next-token predictions, then save prompts
 for use in DLA, Attention, and other analysis pages.
 
-Two ways to build prompts:
+Three ways to build prompts:
   - **Text mode**: type text, it gets tokenized naturally.
   - **Token builder**: construct prompts one token at a time, choosing
     exact token boundaries (e.g. three tokens '"', ':', '"' instead of
     the merged '":"' the tokenizer would produce).
+  - **Constrained generation**: supply a JSON schema and prompt, then
+    generate token-by-token with CFG-based grammar constraints
+    (same approach as OpenAI Structured Outputs via llguidance).
 """
 
 import html as html_mod
+import json
 
 import torch
 import streamlit as st
@@ -85,9 +89,11 @@ def _render_chips(
 
 
 # ===================================================================
-# Tab layout: Text Explorer | Token Builder
+# Tab layout: Text Explorer | Token Builder | Constrained Generation
 # ===================================================================
-tab_text, tab_builder = st.tabs(["Text Explorer", "Token Builder"])
+tab_text, tab_builder, tab_constrained = st.tabs(
+    ["Text Explorer", "Token Builder", "Constrained Generation"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +425,285 @@ with tab_builder:
                 for i, (tid, p) in enumerate(zip(top_ids, top_p))
             ]
             st.dataframe(rows, use_container_width=False, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Constrained Generation — CFG-based (llguidance / OpenAI-style)
+# ---------------------------------------------------------------------------
+_CG_KEY = "cg_generated_tokens"
+_CG_INFO_KEY = "cg_token_infos"
+
+_DEFAULT_SCHEMA = """{
+  "type": "object",
+  "properties": {
+    "entity": { "type": "string" }
+  },
+  "required": ["entity"],
+  "additionalProperties": false
+}"""
+
+with tab_constrained:
+    if not model_loaded:
+        st.warning("Load a model first to use constrained generation.")
+        st.stop()
+
+    st.caption(
+        "Generate token-by-token with CFG grammar constraints "
+        "(same approach as OpenAI Structured Outputs). "
+        "The full prompt + generated output can be saved for analysis."
+    )
+
+    # --- Schema input ---
+    st.markdown("##### JSON Schema")
+    schema_str = st.text_area(
+        "JSON Schema",
+        value=_DEFAULT_SCHEMA,
+        height=160,
+        key="cg_schema",
+        label_visibility="collapsed",
+    )
+
+    # Validate schema on every change
+    _schema_valid = False
+    _schema_obj = None
+    try:
+        _schema_obj = json.loads(schema_str)
+        _schema_valid = True
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON: {e}")
+
+    # --- Prompt input ---
+    st.markdown("##### Prompt")
+    cg_prompt = st.text_area(
+        "Prompt",
+        height=80,
+        key="cg_prompt",
+        placeholder="e.g. Extract the person from: The film was directed by James Cameron.",
+        label_visibility="collapsed",
+    )
+
+    # --- Generation settings ---
+    col_bos, col_max, col_temp = st.columns(3)
+    cg_prepend_bos = col_bos.checkbox(
+        "Prepend BOS", value=cfg.model.prepend_bos, key="cg_bos",
+    )
+    cg_max_tokens = col_max.number_input(
+        "Max new tokens", min_value=1, max_value=256, value=32, key="cg_max",
+    )
+    cg_temperature = col_temp.number_input(
+        "Temperature", min_value=0.0, max_value=2.0, value=0.0,
+        step=0.1, key="cg_temp",
+    )
+
+    # --- Generate button ---
+    can_generate = _schema_valid and bool(cg_prompt)
+
+    if st.button(
+        "Generate (constrained)",
+        type="primary",
+        disabled=not can_generate,
+        key="cg_generate_btn",
+    ):
+        from constrained_decoding import (
+            LLGuidanceConstraint,
+            TokenConstraintInfo,
+            make_json_schema_grammar,
+        )
+
+        with st.spinner("Compiling grammar..."):
+            try:
+                grammar = make_json_schema_grammar(_schema_obj)
+            except Exception as e:
+                st.error(f"Grammar compilation failed: {e}")
+                st.stop()
+
+            model_name = cfg.model.name
+            constraint = LLGuidanceConstraint(
+                model_name, grammar,
+                model_vocab_size=model.cfg.d_vocab,
+            )
+
+        with st.spinner("Generating..."):
+            tokens, str_toks = tokenize(
+                model, cg_prompt, prepend_bos=cg_prepend_bos,
+            )
+            prompt_ids = tokens[0].tolist()
+            input_ids = tokens.clone()
+
+            generated: list[int] = []
+            infos: list[dict] = []
+
+            for step in range(cg_max_tokens):
+                with torch.no_grad():
+                    logits = model(input_ids)[:, -1, :]
+
+                mask, info = constraint.get_mask_and_info(logits.device)
+                logits[:, ~mask] = float("-inf")
+
+                if cg_temperature == 0:
+                    token_id = logits.argmax(dim=-1).item()
+                else:
+                    probs = torch.softmax(
+                        logits / cg_temperature, dim=-1,
+                    )
+                    token_id = torch.multinomial(probs, 1).item()
+
+                info.token_id = token_id
+                info.token_str = model.tokenizer.decode(token_id)
+                generated.append(token_id)
+                infos.append({
+                    "position": info.position,
+                    "token_id": info.token_id,
+                    "token_str": info.token_str,
+                    "allowed_count": info.allowed_count,
+                    "was_forced": info.was_forced,
+                    "is_schema_token": info.is_schema_token,
+                })
+
+                done = constraint.consume(token_id)
+                if done:
+                    break
+
+                input_ids = torch.cat([
+                    input_ids,
+                    torch.tensor(
+                        [[token_id]],
+                        dtype=torch.long,
+                        device=input_ids.device,
+                    ),
+                ], dim=1)
+
+            st.session_state[_CG_KEY] = {
+                "prompt_ids": prompt_ids,
+                "generated_ids": generated,
+                "prompt_text": cg_prompt,
+            }
+            st.session_state[_CG_INFO_KEY] = infos
+
+    # --- Display results ---
+    if _CG_KEY in st.session_state:
+        cg_data = st.session_state[_CG_KEY]
+        cg_infos = st.session_state[_CG_INFO_KEY]
+        gen_ids = cg_data["generated_ids"]
+
+        st.markdown("##### Generated output")
+
+        # Decoded text
+        decoded = model.tokenizer.decode(gen_ids)
+        st.code(decoded, language="json")
+
+        # Token-level constraint table
+        st.markdown("##### Token constraint details")
+
+        # Colour-coded chips for generated tokens
+        chips_html = []
+        for info in cg_infos:
+            if info["was_forced"]:
+                bg, color, label = "#ffcdd2", "#b71c1c", "forced"
+            elif info["is_schema_token"]:
+                bg, color, label = "#fff9c4", "#f57f17", "schema"
+            else:
+                bg, color, label = "#c8e6c9", "#1b5e20", "content"
+
+            tok_display = html_mod.escape(repr(info["token_str"]))
+            chips_html.append(
+                f'<span title="pos {info["position"]} · id {info["token_id"]}'
+                f' · {info["allowed_count"]} allowed · {label}"'
+                f' style="display:inline-block;margin:2px 3px;padding:3px 9px;'
+                f'border-radius:4px;background:{bg};color:{color};'
+                f'font-family:monospace;font-size:0.83em;white-space:pre;">'
+                f'<sup style="color:#999;font-size:0.7em;margin-right:2px">'
+                f'{info["position"]}</sup>'
+                f"{tok_display}</span>"
+            )
+        legend = (
+            '<span style="font-size:0.8em;color:#666">'
+            '<span style="background:#ffcdd2;padding:1px 6px;border-radius:3px">'
+            "forced</span> "
+            '<span style="background:#fff9c4;padding:1px 6px;border-radius:3px">'
+            "schema</span> "
+            '<span style="background:#c8e6c9;padding:1px 6px;border-radius:3px">'
+            "content</span></span>"
+        )
+        st.html(
+            f"<div style='margin-bottom:6px'>{legend}</div>"
+            f"<div style='line-height:2.3;padding:4px 0'>"
+            + "".join(chips_html)
+            + "</div>"
+        )
+
+        # Detailed table
+        st.dataframe(
+            [
+                {
+                    "Pos": i["position"],
+                    "Token": repr(i["token_str"]),
+                    "ID": i["token_id"],
+                    "Allowed": i["allowed_count"],
+                    "Forced": i["was_forced"],
+                    "Schema": i["is_schema_token"],
+                }
+                for i in cg_infos
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Summary stats
+        n_forced = sum(1 for i in cg_infos if i["was_forced"])
+        n_schema = sum(1 for i in cg_infos if i["is_schema_token"])
+        n_content = sum(
+            1 for i in cg_infos if not i["is_schema_token"]
+        )
+        content_infos = [
+            i for i in cg_infos if not i["is_schema_token"]
+        ]
+        avg_allowed = (
+            sum(i["allowed_count"] for i in content_infos) / len(content_infos)
+            if content_infos
+            else 0
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total tokens", len(cg_infos))
+        c2.metric("Schema tokens", n_schema)
+        c3.metric("Content tokens", n_content)
+        c4.metric("Forced (1 option)", n_forced)
+
+        # --- Save as prompt ---
+        st.markdown("##### Save for analysis")
+        st.caption(
+            "Saves the full sequence (prompt + generated output) "
+            "with exact token IDs for use in DLA, Attention, etc."
+        )
+        col_cg_label, col_cg_save = st.columns([3, 1])
+        with col_cg_label:
+            cg_save_label = st.text_input(
+                "Label",
+                placeholder="e.g. constrained-entity-extraction",
+                key="cg_save_label",
+                label_visibility="collapsed",
+            )
+        with col_cg_save:
+            if st.button(
+                "Save Prompt", type="primary", key="cg_save_btn",
+            ):
+                if not cg_save_label or not cg_save_label.strip():
+                    st.warning("Enter a label.")
+                else:
+                    all_ids = cg_data["prompt_ids"] + gen_ids
+                    full_text = model.tokenizer.decode(all_ids)
+                    save_prompt(
+                        cg_save_label.strip(),
+                        full_text,
+                        token_ids=all_ids,
+                    )
+                    st.success(
+                        f"Saved **{cg_save_label.strip()}** "
+                        f"({len(all_ids)} tokens: "
+                        f"{len(cg_data['prompt_ids'])} prompt + "
+                        f"{len(gen_ids)} generated)"
+                    )
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------

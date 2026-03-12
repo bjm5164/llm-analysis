@@ -13,7 +13,17 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/4_Targeted_Patching.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(python3 -c \":*)",
       "Bash(python -c \"from circuitsvis.attention import attention_pattern; help\\(attention_pattern\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/7_Patch_Screen.py''\\).read\\(\\)\\); print\\(''OK''\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''src/pages/7_Patch_Screen.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python3 -c \"from datasets import load_dataset; ds = load_dataset\\(''DFKI-SLT/tacred'', ''original'', split=''train'', streaming=True\\); print\\(next\\(iter\\(ds\\)\\)\\)\")",
+      "Bash(pip install datasets)",
+      "Bash(uv pip install datasets)",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(.venv/bin/python -m pip install datasets)",
+      "WebFetch(domain:transformerlensorg.github.io)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:deepwiki.com)"
     ],
     "additionalDirectories": [
       "/home/bmark/Documents/Projects/llm-analysis/src/data"

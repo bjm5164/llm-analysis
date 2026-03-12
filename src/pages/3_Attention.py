@@ -18,10 +18,21 @@ from app_state import (
 )
 from attribution import head_attribution
 from model import run_with_cache
+from ov_circuits import (
+    head_activity,
+    ov_eigenvalues_single,
+    copying_score,
+    composition_from_act,
+    composition_to_act,
+    trace_circuit_act,
+)
 from viz_interactive import (
+    activity_heatmap,
     attention_heads_cv,
     attention_single_cv,
     attention_source_row,
+    eigenvalue_spectrum,
+    circuit_graph,
 )
 
 st.set_page_config(page_title="Attention — LLM Analysis", layout="wide")
@@ -148,15 +159,17 @@ st.divider()
 # Tab layout
 # ---------------------------------------------------------------------------
 if is_comparison:
-    tab_dla, tab_explorer, tab_focus = st.tabs([
+    tab_dla, tab_explorer, tab_focus, tab_ov = st.tabs([
         "DLA-Guided Comparison",
         "Layer Explorer",
         "Position Focus",
+        "OV Circuits",
     ])
 else:
-    tab_explorer, tab_focus = st.tabs([
+    tab_explorer, tab_focus, tab_ov = st.tabs([
         "Layer Explorer",
         "Position Focus",
+        "OV Circuits",
     ])
     tab_dla = None
 
@@ -334,3 +347,346 @@ with tab_focus:
         components.html(html, height=1000, scrolling=False)
     except Exception as e:
         st.warning(f"Cannot plot ({focus_label_long}): {e}")
+
+# ---------------------------------------------------------------------------
+# OV Circuits — activity trace (neuroscience-style) with A/B comparison
+# ---------------------------------------------------------------------------
+with tab_ov:
+    st.markdown(
+        "**Neuroscience-style activity trace.** "
+        "Given the stimulus (input tokens), see which heads fired strongest "
+        "at a position, pick a seed head, and trace its signal forward and "
+        "backward through the model. "
+        + ("Compare baseline vs constrained to see where circuits break."
+           if is_comparison else "")
+    )
+
+    import numpy as np
+    import plotly.express as px
+
+    model = get_model()
+
+    ov_cache_a = results["A"]["cache"]
+    ov_str_tokens_a = results["A"]["str_tokens"]
+    seq_len_a = len(ov_str_tokens_a)
+
+    if is_comparison:
+        ov_cache_b = results["B"]["cache"]
+        ov_str_tokens_b = results["B"]["str_tokens"]
+        seq_len_b = len(ov_str_tokens_b)
+
+    # --- Step 1: Position selector + activity map ---
+    st.subheader("1. Activity map — which heads fired?")
+    st.caption(
+        "Per-head output norm at the selected position: "
+        "‖z @ W_O‖. Bright = strong contribution to the residual stream."
+    )
+
+    col_pos_a = st.columns(2 if is_comparison else 1)
+    with col_pos_a[0]:
+        ov_pos_a = st.slider(
+            "Position (Baseline)" if is_comparison else "Token position",
+            0, seq_len_a - 1, seq_len_a - 1,
+            key="ov_pos_a",
+            help="Position to analyze in the baseline prompt.",
+        )
+        st.caption(
+            f"Baseline pos {ov_pos_a}: `{repr(ov_str_tokens_a[ov_pos_a])}`"
+        )
+    if is_comparison:
+        with col_pos_a[1]:
+            ov_pos_b = st.slider(
+                "Position (Schema)",
+                0, seq_len_b - 1, seq_len_b - 1,
+                key="ov_pos_b",
+                help="Position to analyze in the schema prompt.",
+            )
+            st.caption(
+                f"Schema pos {ov_pos_b}: `{repr(ov_str_tokens_b[ov_pos_b])}`"
+            )
+
+    act_a = head_activity(model, ov_cache_a, pos=ov_pos_a)
+    if is_comparison:
+        act_b = head_activity(model, ov_cache_b, pos=ov_pos_b)
+
+    # Show top-firing heads from baseline as quick-pick options
+    flat_act = act_a.flatten()
+    top_indices = flat_act.argsort()[::-1][:8]
+    top_heads = [
+        (int(idx) // n_heads, int(idx) % n_heads) for idx in top_indices
+    ]
+    top_labels = [
+        f"L{l} H{h} ({flat_act[l * n_heads + h]:.1f})"
+        for l, h in top_heads
+    ]
+
+    col_pick, col_manual_l, col_manual_h = st.columns([2, 1, 1])
+    with col_pick:
+        pick = st.selectbox(
+            "Quick-pick from top-firing heads (baseline)",
+            top_labels,
+            key="ov_quick_pick",
+        )
+        pick_idx = top_labels.index(pick)
+        default_layer, default_head = top_heads[pick_idx]
+    with col_manual_l:
+        seed_layer = st.number_input(
+            "Seed layer", 0, n_layers - 1, default_layer, key="ov_seed_layer",
+        )
+    with col_manual_h:
+        seed_head = st.number_input(
+            "Seed head", 0, n_heads - 1, default_head, key="ov_seed_head",
+        )
+
+    if is_comparison:
+        col_act_a, col_act_b, col_act_diff = st.columns(3)
+        with col_act_a:
+            st.plotly_chart(
+                activity_heatmap(
+                    act_a,
+                    title=f"Baseline — pos {ov_pos_a}",
+                    highlight=(seed_layer, seed_head),
+                ),
+                use_container_width=True,
+            )
+        with col_act_b:
+            st.plotly_chart(
+                activity_heatmap(
+                    act_b,
+                    title=f"Schema — pos {ov_pos_b}",
+                    highlight=(seed_layer, seed_head),
+                ),
+                use_container_width=True,
+            )
+        with col_act_diff:
+            diff_act = act_b - act_a
+            vabs = max(float(np.abs(diff_act).max()), 1e-6)
+            fig_diff = px.imshow(
+                diff_act,
+                color_continuous_scale="RdBu",
+                zmin=-vabs, zmax=vabs,
+                labels={"x": "Head", "y": "Layer", "color": "Δ‖output‖"},
+                title="Schema − Baseline",
+                aspect="auto",
+            )
+            fig_diff.update_layout(
+                xaxis=dict(tickmode="linear", dtick=max(1, n_heads // 16)),
+                yaxis=dict(tickmode="linear", dtick=max(1, n_layers // 20)),
+                height=max(300, n_layers * 22 + 100),
+            )
+            fig_diff.add_shape(
+                type="rect",
+                x0=seed_head - 0.5, x1=seed_head + 0.5,
+                y0=seed_layer - 0.5, y1=seed_layer + 0.5,
+                line=dict(color="black", width=3),
+            )
+            st.plotly_chart(fig_diff, use_container_width=True)
+    else:
+        st.plotly_chart(
+            activity_heatmap(
+                act_a,
+                title=f"Head activity at pos {ov_pos_a}: "
+                      f"`{repr(ov_str_tokens_a[ov_pos_a])}`",
+                highlight=(seed_layer, seed_head),
+            ),
+            use_container_width=True,
+        )
+
+    # --- Step 2: Eigenvalue spectrum of the seed head ---
+    st.subheader(f"2. Eigenvalue spectrum — L{seed_layer} H{seed_head}")
+    st.caption(
+        "Top eigenvalues of W_OV in the complex plane. "
+        "Near +1 = copying, near -1 = negation, small |λ| = suppression. "
+        "(Weight-based — same for both prompts.)"
+    )
+
+    eigs = ov_eigenvalues_single(model, seed_layer, seed_head)
+    cscore = copying_score(eigs)
+    col_metric, col_slider = st.columns([1, 3])
+    with col_metric:
+        st.metric("Copying score", f"{cscore:.3f}")
+    with col_slider:
+        eig_k = st.slider(
+            "Top-k eigenvalues", 5, min(50, len(eigs)), 20, key="ov_eig_k",
+        )
+    st.plotly_chart(
+        eigenvalue_spectrum(eigs, seed_layer, seed_head, top_k=eig_k),
+        use_container_width=True,
+    )
+
+    # --- Step 3: Signal trace — who reads from / writes to the seed? ---
+    st.subheader("3. Signal trace — composition on this input")
+    if is_comparison:
+        st.caption(
+            "How much of the seed head's output reaches each downstream "
+            "head (readers) and how much each upstream head contributes to "
+            "the seed (writers). Side-by-side: does constrained decoding "
+            "break the circuit edges?"
+        )
+    else:
+        st.caption(
+            "How much of the seed head's actual output reaches each "
+            "downstream head's value space (readers), and how much of each "
+            "upstream head's output reaches the seed (writers)."
+        )
+
+    readers_a = composition_from_act(
+        model, ov_cache_a, seed_layer, seed_head, pos=ov_pos_a,
+    )
+    writers_a = composition_to_act(
+        model, ov_cache_a, seed_layer, seed_head, pos=ov_pos_a,
+    )
+    if is_comparison:
+        readers_b = composition_from_act(
+            model, ov_cache_b, seed_layer, seed_head, pos=ov_pos_b,
+        )
+        writers_b = composition_to_act(
+            model, ov_cache_b, seed_layer, seed_head, pos=ov_pos_b,
+        )
+
+    def _comp_heatmap(data, title, cmap="Plasma"):
+        vmax = float(data.max()) or 1e-6
+        fig = px.imshow(
+            data, color_continuous_scale=cmap,
+            zmin=0, zmax=vmax,
+            labels={"x": "Head", "y": "Layer", "color": "‖contrib‖"},
+            title=title, aspect="auto",
+        )
+        fig.update_layout(
+            xaxis=dict(tickmode="linear", dtick=max(1, n_heads // 16)),
+            yaxis=dict(tickmode="linear", dtick=max(1, n_layers // 20)),
+            height=350,
+        )
+        return fig
+
+    def _diff_heatmap(data, title):
+        vabs = max(float(np.abs(data).max()), 1e-6)
+        fig = px.imshow(
+            data, color_continuous_scale="RdBu",
+            zmin=-vabs, zmax=vabs,
+            labels={"x": "Head", "y": "Layer", "color": "Δ‖contrib‖"},
+            title=title, aspect="auto",
+        )
+        fig.update_layout(
+            xaxis=dict(tickmode="linear", dtick=max(1, n_heads // 16)),
+            yaxis=dict(tickmode="linear", dtick=max(1, n_layers // 20)),
+            height=350,
+        )
+        return fig
+
+    # --- Readers ---
+    st.markdown(f"**Reads from L{seed_layer} H{seed_head}** (downstream)")
+    if is_comparison:
+        cr_a, cr_b, cr_d = st.columns(3)
+        with cr_a:
+            st.plotly_chart(
+                _comp_heatmap(readers_a, "Baseline"), use_container_width=True,
+            )
+        with cr_b:
+            st.plotly_chart(
+                _comp_heatmap(readers_b, "Schema"), use_container_width=True,
+            )
+        with cr_d:
+            st.plotly_chart(
+                _diff_heatmap(readers_b - readers_a, "Schema − Baseline"),
+                use_container_width=True,
+            )
+    else:
+        st.plotly_chart(
+            _comp_heatmap(readers_a, "Readers"), use_container_width=True,
+        )
+
+    # --- Writers ---
+    st.markdown(f"**Writes to L{seed_layer} H{seed_head}** (upstream)")
+    if is_comparison:
+        cw_a, cw_b, cw_d = st.columns(3)
+        with cw_a:
+            st.plotly_chart(
+                _comp_heatmap(writers_a, "Baseline"), use_container_width=True,
+            )
+        with cw_b:
+            st.plotly_chart(
+                _comp_heatmap(writers_b, "Schema"), use_container_width=True,
+            )
+        with cw_d:
+            st.plotly_chart(
+                _diff_heatmap(writers_b - writers_a, "Schema − Baseline"),
+                use_container_width=True,
+            )
+    else:
+        st.plotly_chart(
+            _comp_heatmap(writers_a, "Writers"), use_container_width=True,
+        )
+
+    # --- Step 4: Circuit graph ---
+    st.subheader("4. Circuit graph")
+    st.caption(
+        "BFS from the seed head using activation-based composition. "
+        "Edges show how much of a reader's value came from the writer."
+    )
+    col_depth, col_topk = st.columns(2)
+    with col_depth:
+        trace_depth = st.slider("Trace depth", 1, 4, 2, key="ov_trace_depth")
+    with col_topk:
+        trace_k = st.slider("Top-k per hop", 2, 10, 5, key="ov_trace_k")
+
+    edges_a = trace_circuit_act(
+        model, ov_cache_a, seed_layer, seed_head,
+        pos=ov_pos_a, depth=trace_depth, top_k=trace_k,
+    )
+
+    if is_comparison:
+        edges_b = trace_circuit_act(
+            model, ov_cache_b, seed_layer, seed_head,
+            pos=ov_pos_b, depth=trace_depth, top_k=trace_k,
+        )
+        col_g_a, col_g_b = st.columns(2)
+        with col_g_a:
+            st.plotly_chart(
+                circuit_graph(
+                    edges_a, n_layers, n_heads,
+                    title=f"Baseline — L{seed_layer} H{seed_head} "
+                          f"at pos {ov_pos_a}",
+                ),
+                use_container_width=True,
+            )
+        with col_g_b:
+            st.plotly_chart(
+                circuit_graph(
+                    edges_b, n_layers, n_heads,
+                    title=f"Schema — L{seed_layer} H{seed_head} "
+                          f"at pos {ov_pos_b}",
+                ),
+                use_container_width=True,
+            )
+
+        # Summary: edges that weakened or disappeared
+        edge_map_a = {(la, ha, lb, hb): s for la, ha, lb, hb, s in edges_a}
+        edge_map_b = {(la, ha, lb, hb): s for la, ha, lb, hb, s in edges_b}
+        all_edges = set(edge_map_a) | set(edge_map_b)
+        edge_diffs = []
+        for e in all_edges:
+            sa = edge_map_a.get(e, 0.0)
+            sb = edge_map_b.get(e, 0.0)
+            edge_diffs.append((*e, sa, sb, sb - sa))
+        edge_diffs.sort(key=lambda x: x[-1])  # most weakened first
+
+        st.markdown("**Circuit edge changes** (sorted by largest drop)")
+        rows = []
+        for la, ha, lb, hb, sa, sb, delta in edge_diffs[:15]:
+            rows.append({
+                "Edge": f"L{la}H{ha} → L{lb}H{hb}",
+                "Baseline": f"{sa:.3f}",
+                "Schema": f"{sb:.3f}",
+                "Δ": f"{delta:+.3f}",
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.plotly_chart(
+            circuit_graph(
+                edges_a, n_layers, n_heads,
+                title=f"Circuit from L{seed_layer} H{seed_head} "
+                      f"at pos {ov_pos_a}",
+            ),
+            use_container_width=True,
+        )

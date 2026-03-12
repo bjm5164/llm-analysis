@@ -140,8 +140,11 @@ with col_ctrl:
     )
 
     noise_std = 1.0
+    noise_scale = 1.0
     if intervention == "noise":
         noise_std = st.slider("Noise std", 0.01, 10.0, value=1.0, step=0.05, key="ps_noise_std")
+        noise_scale = st.slider("Noise magnitude", 0.01, 10.0, value=1.0, step=0.05, key="ps_noise_scale",
+                                help="Multiplier applied to the noise vector after sampling")
 
     # --- Position selectors ---
     source_pos_idx = None
@@ -333,7 +336,7 @@ if run:
                         elif intervention == "mean":
                             act[:, pos_idx, _head, :] = clean_act[:, :, _head, :].mean(dim=1)
                         elif intervention == "noise":
-                            act[:, pos_idx, _head, :] += torch.randn_like(act[:, pos_idx, _head, :]) * noise_std
+                            act[:, pos_idx, _head, :] += torch.randn_like(act[:, pos_idx, _head, :]) * noise_std * noise_scale
                         elif intervention == "patch":
                             act[:, pos_idx, _head, :] = source_cache[hook.name][:, _src_pos, _head, :]
                     elif comp == "mlp_neuron":
@@ -342,7 +345,7 @@ if run:
                         elif intervention == "mean":
                             act[:, pos_idx, _neuron] = clean_act[:, :, _neuron].mean(dim=1)
                         elif intervention == "noise":
-                            act[:, pos_idx, _neuron] += torch.randn(act.shape[0], device=act.device) * noise_std
+                            act[:, pos_idx, _neuron] += torch.randn(act.shape[0], device=act.device) * noise_std * noise_scale
                         elif intervention == "patch":
                             act[:, pos_idx, _neuron] = source_cache[hook.name][:, _src_pos, _neuron]
                     else:
@@ -351,7 +354,7 @@ if run:
                         elif intervention == "mean":
                             act[:, pos_idx, :] = clean_act.mean(dim=1)
                         elif intervention == "noise":
-                            act[:, pos_idx, :] += torch.randn_like(act[:, pos_idx, :]) * noise_std
+                            act[:, pos_idx, :] += torch.randn_like(act[:, pos_idx, :]) * noise_std * noise_scale
                         elif intervention == "patch":
                             act[:, pos_idx, :] = source_cache[hook.name][:, _src_pos, :]
                     return act

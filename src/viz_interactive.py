@@ -502,6 +502,252 @@ def residual_norm_across_layers(
     return fig
 
 
+def activity_heatmap(
+    activity: "np.ndarray",
+    title: str = "Head activity (output norm)",
+    highlight: tuple[int, int] | None = None,
+) -> go.Figure:
+    """Heatmap of per-head activity norms (n_layers x n_heads).
+
+    Args:
+        activity: Float array (n_layers, n_heads) from head_activity().
+        highlight: Optional (layer, head) to mark with a border.
+    """
+    n_layers, n_heads = activity.shape
+    vmax = float(activity.max()) or 1e-6
+    fig = px.imshow(
+        activity,
+        color_continuous_scale="Inferno",
+        zmin=0,
+        zmax=vmax,
+        labels={"x": "Head", "y": "Layer", "color": "‖output‖"},
+        title=title,
+        aspect="auto",
+    )
+    fig.update_layout(
+        xaxis=dict(tickmode="linear", dtick=max(1, n_heads // 16)),
+        yaxis=dict(tickmode="linear", dtick=max(1, n_layers // 20)),
+        height=max(300, n_layers * 22 + 100),
+    )
+    if highlight is not None:
+        hl, hh = highlight
+        fig.add_shape(
+            type="rect",
+            x0=hh - 0.5, x1=hh + 0.5,
+            y0=hl - 0.5, y1=hl + 0.5,
+            line=dict(color="white", width=3),
+        )
+    return fig
+
+
+def eigenvalue_heatmap(
+    eigenvalues: "np.ndarray",
+    top_k: int = 10,
+    title: str = "Top OV eigenvalue magnitudes per head",
+) -> go.Figure:
+    """Heatmap of top-k eigenvalue magnitudes for every head.
+
+    Args:
+        eigenvalues: Complex array (n_layers, n_heads, d_model) from ov_circuits.
+        top_k: Number of top eigenvalues to show per head.
+    """
+    magnitudes = np.abs(eigenvalues[:, :, :top_k])  # (L, H, k)
+    n_layers, n_heads, k = magnitudes.shape
+
+    # Reshape to (n_layers * top_k, n_heads) for heatmap
+    # Group eigenvalue ranks within each layer
+    data = magnitudes.transpose(0, 2, 1).reshape(n_layers * k, n_heads)
+
+    y_labels = [
+        f"L{l} λ{i}" for l in range(n_layers) for i in range(k)
+    ]
+
+    fig = px.imshow(
+        data,
+        y=y_labels,
+        color_continuous_scale="Viridis",
+        title=title,
+        labels={"x": "Head", "y": "Layer / Eigenvalue rank", "color": "|λ|"},
+        aspect="auto",
+    )
+    fig.update_layout(
+        xaxis=dict(tickmode="linear", dtick=1),
+        height=max(300, n_layers * k * 18 + 100),
+    )
+    return fig
+
+
+def copying_score_heatmap(
+    scores: "np.ndarray",
+    title: str = "Copying score per head",
+) -> go.Figure:
+    """Heatmap of per-head copying scores (n_layers x n_heads)."""
+    fig = px.imshow(
+        scores,
+        color_continuous_scale="YlOrRd",
+        zmin=0,
+        zmax=1,
+        title=title,
+        labels={"x": "Head", "y": "Layer", "color": "Copying score"},
+        aspect="auto",
+    )
+    n_layers, n_heads = scores.shape
+    fig.update_layout(
+        xaxis=dict(tickmode="linear", dtick=max(1, n_heads // 16)),
+        yaxis=dict(tickmode="linear", dtick=max(1, n_layers // 20)),
+    )
+    return fig
+
+
+def composition_heatmap(
+    scores: "np.ndarray",
+    title: str = "V-Composition scores (writer → reader)",
+) -> go.Figure:
+    """Heatmap of pairwise head composition scores.
+
+    Args:
+        scores: (n_layers, n_heads, n_layers, n_heads) array.
+    """
+    n_layers, n_heads = scores.shape[:2]
+    n_total = n_layers * n_heads
+    flat = scores.reshape(n_total, n_total)
+
+    labels = [f"L{l}H{h}" for l in range(n_layers) for h in range(n_heads)]
+
+    fig = px.imshow(
+        flat,
+        x=labels,
+        y=labels,
+        color_continuous_scale="Plasma",
+        title=title,
+        labels={"x": "Reader head", "y": "Writer head", "color": "‖W_O·W_V‖"},
+        aspect="auto",
+    )
+    fig.update_layout(
+        xaxis=dict(tickangle=-90, tickfont_size=7),
+        yaxis=dict(tickfont_size=7),
+        height=max(500, n_total * 12 + 100),
+        width=max(500, n_total * 12 + 100),
+    )
+    return fig
+
+
+def circuit_graph(
+    top_edges: list[tuple[int, int, int, int, float]],
+    n_layers: int,
+    n_heads: int,
+    title: str = "Head composition circuit graph",
+) -> go.Figure:
+    """Plotly network graph of head-to-head composition.
+
+    Heads arranged in a grid (layer on y-axis, head on x-axis).
+    Edges connect heads with high V-composition scores.
+
+    Args:
+        top_edges: List of (la, ha, lb, hb, score) from top_compositions.
+    """
+    if not top_edges:
+        fig = go.Figure()
+        fig.update_layout(title="No edges above threshold")
+        return fig
+
+    max_score = max(e[4] for e in top_edges)
+    min_score = min(e[4] for e in top_edges)
+    score_range = max_score - min_score if max_score > min_score else 1.0
+
+    # Node positions: x = head index, y = layer (top = last layer)
+    edge_traces = []
+    for la, ha, lb, hb, score in top_edges:
+        norm = (score - min_score) / score_range
+        width = 0.5 + 3.5 * norm
+        opacity = 0.3 + 0.7 * norm
+        edge_traces.append(go.Scatter(
+            x=[ha, hb, None],
+            y=[la, lb, None],
+            mode="lines",
+            line=dict(width=width, color=f"rgba(99, 110, 250, {opacity})"),
+            hoverinfo="text",
+            text=[f"L{la}H{ha} → L{lb}H{hb}: {score:.3f}"] * 3,
+            showlegend=False,
+        ))
+
+    # Collect which heads participate
+    involved = set()
+    for la, ha, lb, hb, _ in top_edges:
+        involved.add((la, ha))
+        involved.add((lb, hb))
+
+    node_x = [h for l, h in involved]
+    node_y = [l for l, h in involved]
+    node_text = [f"L{l}H{h}" for l, h in involved]
+
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode="markers+text",
+        marker=dict(size=10, color="#636EFA", line=dict(width=1, color="white")),
+        text=node_text,
+        textposition="top center",
+        textfont=dict(size=8),
+        hoverinfo="text",
+        showlegend=False,
+    )
+
+    fig = go.Figure(data=edge_traces + [node_trace])
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title="Head", tickmode="linear", dtick=1, range=[-0.5, n_heads - 0.5]),
+        yaxis=dict(title="Layer", tickmode="linear", dtick=1, range=[-0.5, n_layers - 0.5]),
+        height=max(400, n_layers * 40 + 100),
+        hovermode="closest",
+        margin=dict(t=60, b=40),
+    )
+    return fig
+
+
+def eigenvalue_spectrum(
+    eigenvalues: "np.ndarray",
+    layer: int,
+    head: int,
+    top_k: int = 20,
+) -> go.Figure:
+    """Scatter plot of top eigenvalues in the complex plane for one head.
+
+    Args:
+        eigenvalues: 1-D complex array (already for a single head) or
+                     3-D array (n_layers, n_heads, d_model).
+    """
+    eigs = eigenvalues[:top_k] if eigenvalues.ndim == 1 else eigenvalues[layer, head, :top_k]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=eigs.real,
+        y=eigs.imag,
+        mode="markers+text",
+        marker=dict(size=8, color=np.abs(eigs), colorscale="Viridis", showscale=True,
+                    colorbar=dict(title="|λ|")),
+        text=[f"λ{i}" for i in range(len(eigs))],
+        textposition="top center",
+        textfont=dict(size=8),
+        hovertext=[f"λ{i} = {e.real:.4f} + {e.imag:.4f}i  |λ|={abs(e):.4f}" for i, e in enumerate(eigs)],
+        hoverinfo="text",
+    ))
+    # Reference unit circle
+    theta = np.linspace(0, 2 * np.pi, 100)
+    fig.add_trace(go.Scatter(
+        x=np.cos(theta), y=np.sin(theta),
+        mode="lines", line=dict(dash="dot", color="gray", width=1),
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.update_layout(
+        title=f"L{layer} H{head} — Top {top_k} eigenvalues of W_OV",
+        xaxis=dict(title="Re(λ)", scaleanchor="y"),
+        yaxis=dict(title="Im(λ)"),
+        height=450,
+        margin=dict(t=60),
+    )
+    return fig
+
+
 def tokenization_table(
     str_tokens: list[str],
     token_ids: torch.Tensor,

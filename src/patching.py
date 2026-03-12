@@ -318,6 +318,7 @@ def targeted_intervention(
     head: int | None = None,
     neuron: int | None = None,
     noise_std: float = 1.0,
+    noise_scale: float = 1.0,
     source_cache: ActivationCache | None = None,
     source_pos: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, ActivationCache, ActivationCache]:
@@ -329,6 +330,7 @@ def targeted_intervention(
         head:         head index — required for component="attn_head"
         neuron:       neuron index — required for component="mlp_neuron"
         noise_std:    std of Gaussian noise added for intervention="noise"
+        noise_scale:  magnitude multiplier applied to the noise vector
         source_cache: ActivationCache from a different run — required for intervention="patch"
         source_pos:   position in source_cache to read from (defaults to pos)
 
@@ -367,7 +369,7 @@ def targeted_intervention(
                 # mean over all sequence positions for this head
                 act[:, pos, head, :] = clean_act[:, :, head, :].mean(dim=1)
             elif intervention == "noise":
-                act[:, pos, head, :] += torch.randn_like(act[:, pos, head, :]) * noise_std
+                act[:, pos, head, :] += torch.randn_like(act[:, pos, head, :]) * noise_std * noise_scale
             elif intervention == "patch":
                 act[:, pos, head, :] = source_cache[hook.name][:, src_pos, head, :]
         elif component == "mlp_neuron":
@@ -376,7 +378,7 @@ def targeted_intervention(
             elif intervention == "mean":
                 act[:, pos, neuron] = clean_act[:, :, neuron].mean(dim=1)
             elif intervention == "noise":
-                act[:, pos, neuron] += torch.randn(act.shape[0], device=act.device) * noise_std
+                act[:, pos, neuron] += torch.randn(act.shape[0], device=act.device) * noise_std * noise_scale
             elif intervention == "patch":
                 act[:, pos, neuron] = source_cache[hook.name][:, src_pos, neuron]
         else:
@@ -386,7 +388,7 @@ def targeted_intervention(
             elif intervention == "mean":
                 act[:, pos, :] = clean_act.mean(dim=1)
             elif intervention == "noise":
-                act[:, pos, :] += torch.randn_like(act[:, pos, :]) * noise_std
+                act[:, pos, :] += torch.randn_like(act[:, pos, :]) * noise_std * noise_scale
             elif intervention == "patch":
                 act[:, pos, :] = source_cache[hook.name][:, src_pos, :]
         return act
